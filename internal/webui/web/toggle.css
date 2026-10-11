@@ -1,0 +1,5 @@
+/* Reused from SimMusic 2024 at the user's request. */
+.toggle{display:inline-block;height:20px;min-width:35px;max-width:35px;padding:2px;background:rgba(0,0,0,.05);border-radius:10px;vertical-align:middle;transition:background .2s;}
+.toggle::before{transition:margin-left .2s,transform .2s;transform:scale(.7);width:16px;height:16px;background:white;border-radius:50%;content:"";display:block;}
+.on .toggle{background:#1E9FFF;}
+.on .toggle::before{margin-left:15px;transform:scale(.9);}

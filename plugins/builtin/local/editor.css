@@ -1,0 +1,26 @@
+/* 元数据编辑窗口的布局。控件样式来自宿主的 SimUI（/.sim/simui.css），这里只安排位置。
+   窗口固定为不需要滚动的大小：左栏是文本字段和封面，右栏整块是歌词。 */
+html, body { height: 100%; }
+body { display: flex; flex-direction: column; }
+/* 窗口没有系统标题栏：这一条用来拖动窗口。关闭用下方的按钮或 Esc。 */
+#editorTitle { padding: 12px 20px 6px; font-size: 1.1em; -webkit-app-region: drag; }
+#editorForm { flex: 1; min-height: 0; display: flex; gap: 20px; padding: 5px 20px 10px; }
+#fieldColumn, #lyricsColumn { flex: 1; min-width: 0; }
+.field { margin-bottom: 4px; }
+.field > span { display: block; font-size: .9em; opacity: .8; }
+.fieldRow { display: flex; gap: 10px; }
+.fieldRow > .field { flex: 1; min-width: 0; }
+/* 歌词占满右栏：SimUI 的 .input 是横向 flex 容器，文本框在其中拉伸到整块高度 */
+#lyricsColumn { display: flex; flex-direction: column; margin-bottom: 0; }
+#lyricsColumn > .input { flex: 1; min-height: 0; }
+#tagLyrics { align-self: stretch; resize: none; }
+.coverRow { display: flex; align-items: center; gap: 15px; margin-top: 10px; }
+#coverBox { width: 110px; height: 110px; flex-shrink: 0; display: grid; place-items: center; border: 1px solid #0000000d; border-radius: 5px; background: #FCFCFC; overflow: hidden; }
+#coverBox > i { font-size: 2.5em; opacity: .2; }
+#coverBox.filled > i { display: none; }
+#coverImage { width: 100%; height: 100%; object-fit: cover; }
+.coverInfo { min-width: 0; font-size: .9em; line-height: 1.6; }
+.coverInfo > div:not(.coverButtons) { opacity: .8; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.coverButtons { display: flex; flex-wrap: wrap; gap: 0 8px; margin-top: 2px; }
+#editorFooter { display: flex; align-items: center; gap: 8px; padding: 6px 20px 10px; border-top: 1px solid #0000000d; }
+#fileName { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: .85em; opacity: .6; }

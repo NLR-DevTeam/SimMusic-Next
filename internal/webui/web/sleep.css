@@ -1,0 +1,9 @@
+html, body { margin: 0; padding: 0; height: 100%; font-family: "Microsoft YaHei", sans-serif; user-select: none; cursor: none; }
+body { background: radial-gradient(ellipse at center, rgba(0, 0, 0, .55), rgba(0, 0, 0, .82) 70%, rgba(0, 0, 0, .92)); overflow: hidden; }
+[hidden] { display: none; }
+#sleepStars { position: fixed; animation: sleepRotate 60s infinite linear; inset: 0; margin: auto; width: 100%; height: 100%; pointer-events: none; }
+.sleepStar { position: absolute; background: white; border-radius: 50%; box-shadow: inset 0 0 5px white; animation: sleepTwinkle 1s infinite alternate; }
+#sleepText { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; text-align: center; color: rgba(255, 255, 255, .8); font-size: 24px; }
+#sleepText h1 { font-size: 36px; font-weight: 600; margin: 0 0 10px; }
+@keyframes sleepTwinkle { from { opacity: .2; transform: scale(.5); } to { opacity: .5; transform: scale(1); } }
+@keyframes sleepRotate { to { transform: rotate(360deg); } }

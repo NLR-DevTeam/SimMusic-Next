@@ -1,0 +1,12 @@
+{
+  "id": "local",
+  "name": "本地音乐",
+  "version": "1.5.2",
+  "author": "SimMusic",
+  "description": "内置音源：扫描并播放本地文件夹中的音频文件，支持读取内嵌封面、内嵌歌词与同名 LRC 文件，可编辑 MP3 / FLAC 文件的元数据。",
+  "main": "main.js",
+  "permissions": ["fs.read", "fs.write", "shell", "sidebar", "trackMenu", "webview"],
+  "capabilities": { "download": false },
+  "schemes": [{ "scheme": "local", "download": false }],
+  "trackMenus": [{ "key": "reveal", "label": "在资源管理器中打开", "icon": "ED70", "scenes": ["list", "play", "queue"], "selection": "single", "permissions": ["shell"] }, { "key": "editTags", "label": "编辑元数据", "icon": "EC86", "scenes": ["list", "play", "queue"], "selection": "single", "permissions": ["fs.write", "webview"] }]
+}

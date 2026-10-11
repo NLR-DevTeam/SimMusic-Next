@@ -1,0 +1,320 @@
+/* SimUI controls and application states. Geometry is implemented in layout.css. */
+html { --leftBarWidth: var(--sideWidth, 200px); --SimsvMainColor: #1e9fff; --SimsvSubColor: #daefff; --SimAPTheme: #1e9fff; color: black; }
+body { height: 100vh; overflow: hidden; }
+button { margin: 0; cursor: default; font-weight: 400; }
+b { font-weight: 400; }
+h1, h2, h3, p { margin: 0; }
+h1 { font-size: 1.5em; font-weight: 400; }
+h2 { font-size: 1.3em; font-weight: 400; }
+h3 { font-size: 1em; font-weight: 400; }
+#titleBar { width: 100%; z-index: 100; }
+.titleActions { display: flex; height: 35px; -webkit-app-region: no-drag; }
+.titleButton { height: 35px; width: 46px; display: flex; align-items: center; justify-content: center; padding: 0 0 1px; background: transparent; color: inherit; border-radius: 0; transition: background .2s, opacity .2s, color .2s; }
+.windowsIcon { font-family: "windowsicon"; }
+.titleButton:hover { background: #00000012; filter: none; }
+.titleButton:active { background: #00000033; opacity: .8; }
+.titleButton.closeButton:hover { background: #e81123; color: white; }
+.titleButton.active { color: #1e9fff; }
+.playerShown #desktopButton { display: none; }
+.darkPlayer.playerShown #titleBar { color: #fffc; }
+#sidebarNav { display: block; }
+.sideGroup { opacity: .5; padding: 0 8px 0 10px; font-size: .9em; display: flex; align-items: center; margin: 20px 0 4px; }
+.sideGroup span { flex: 1; }
+.sideGroup button { display: inline-flex; align-items: center; justify-content: center; padding: 0; width: 18.4px; height: 18.4px; border-radius: 5px; background: transparent; color: inherit; line-height: 1; }
+.sideGroup button i { display: block; line-height: 1; }
+.sideGroup button:hover { background: #00000019; filter: none; }
+.navItem { position: relative; z-index: 0; display: block; width: 100%; text-align: left; padding: 4.5px 10px; color: black; background: transparent; font-size: 16px; border-radius: 5px; transition: background .2s, color .1s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.navItem i { font-size: 16px; margin-right: 4px; }
+.navItem:hover { background: #0000000d; filter: none; }
+.navItem:active { background: #00000019; }
+/* 2024: the gradient lives on a pseudo-element so it can fade; gradients themselves do not transition. */
+.navItem.active { color: white; background: transparent; }
+.navItem::before { content: ""; position: absolute; inset: 0; z-index: -1; background: linear-gradient(90deg, #1e9fff, #1e9fffbb); opacity: 0; transition: opacity .2s; }
+.navItem.active::before { opacity: 1; }
+/* The download entry folds in and out with its tasks; its badge counts the tasks still running. */
+.navItem.collapsible { max-height: 40px; transition: background .2s, color .1s, max-height .2s, padding .2s, opacity .2s; }
+.navItem.collapsed { max-height: 0; padding-block: 0; opacity: 0; pointer-events: none; }
+.navBadge { display: inline-block; min-width: 18px; margin-left: 6px; padding: 0 5px; border-radius: 9px; background: var(--SimsvMainColor); color: white; font-size: 12px; line-height: 18px; text-align: center; vertical-align: 1px; transform: scale(0); opacity: 0; transition: transform .2s, opacity .2s; }
+.navBadge.shown { transform: scale(1); opacity: 1; }
+#sideResizer { position: fixed; left: calc(var(--leftBarWidth) - 2.5px); top: 0; bottom: 0; width: 5px; cursor: col-resize; z-index: 10; }
+#mainContent { overflow: hidden; }
+#rightPlaceholder { inset: 0 0 80px; }
+.pageHeader { padding: 30px 30px 10px; font-size: 1.5em; border-bottom: 1px solid #0000000d; position: absolute; background: #fcfcfce6; backdrop-filter: blur(20px); width: 100%; z-index: 2; display: flex; align-items: center; }
+.pageHeader h1 { font: inherit; }
+.pageHeader h1 i { margin-right: 5px; }
+.pageHeader p { font-size: .6em; opacity: .8; margin-left: 15px; }
+.pageBody { position: absolute; padding: 70px 27.5px 100px; width: 100%; height: 100%; overflow: auto; }
+#musicListContainer { height: 100%; }
+.playlistHeader h1 { font-size: 1.3em; display: block; font-weight: 400; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.playlistHeader .details { opacity: .8; font-size: .9em; margin: 5px 0 10px; }
+/* 2024: one joined 30px group; the buttons share the group's rounded corners. */
+.buttonGroup { display: flex; width: fit-content; height: 30px; border-radius: 5px; overflow: hidden; }
+.buttonGroup button { height: 30px; padding: 0 20px; border-radius: 0; font-size: 15px; white-space: nowrap; }
+.buttonGroup .squareButton { width: 30px; padding: 0; }
+.trackTable { font-size: 16px; }
+.trackTable th:first-child { width: 80px; }
+.trackTable th:nth-child(2) { width: 30%; }
+.trackTable th:last-child { width: 80px; }
+.trackTable td { padding: 0; }
+.trackRow.current { color: #1e9fff; }
+.sortButton { background: transparent; color: inherit; font: inherit; padding: 0; }
+.emptyState { position: absolute; inset: 180px 0 80px; display: flex; align-items: center; justify-content: center; flex-direction: column; font-size: 1.2em; color: #0008; }
+.emptyState i { font-size: 65px; opacity: .3; }
+.trackRow { height: 49px; }
+.trackSpacer td { padding: 0!important; font-size: 0; }
+.searchTitle .inputGroup .sourceSelect { width: 150px; flex-shrink: 0; }
+.searchTitle .inputGroup .searchField { max-width: 500px; width: 100%; }
+.searchTitle .inputGroup button { padding: 0 20px; }
+.plainButton { border: 0; background: transparent; padding: 0; color: inherit; }
+.iconButton { background: transparent; color: inherit; padding: 0; margin: 0; display: inline-flex; align-items: center; justify-content: center; font-family: inherit; font-weight: 400; cursor: default; }
+.quietButton { background: transparent; color: inherit; padding: 0 10px; font-size: .9em; }
+.quietButton:hover { background: #0000000d; filter: none; }
+/* The bar slides and fades with the current track. */
+#playerBar { z-index: 20; opacity: 0; transition: bottom .2s, opacity .2s; }
+.hasCurrent #playerBar { opacity: 1; }
+.hasCurrent:not(.playerShown) #playerBar { bottom: 0; }
+#seekBar { position: absolute; left: 5px; top: 0; width: calc(100% - 10px); height: 6px; z-index: 2; }
+#seekBar .outerBar { border-radius: 0; }
+/* 2024 SimAP: moving stripes on both progress tracks while the audio is being opened. */
+.musicLoading :is(#seekBar, #largeSeekBar) .outerBar { animation: progressLoading 1s linear infinite; background-image: linear-gradient(-45deg, #0000000d 25%, transparent 0, transparent 50%, #0000000d 0, #0000000d 75%, transparent 0, transparent); background-repeat: repeat-x; background-size: 25px 20px; }
+.darkPlayer.musicLoading #largeSeekBar .outerBar { background-image: linear-gradient(-45deg, #ffffff0d 25%, transparent 0, transparent 50%, #ffffff0d 0, #ffffff0d 75%, transparent 0, transparent); }
+@keyframes progressLoading { to { background-position: 25px 0; } }
+#seekBar .dot { width: 11px; height: 11px; }
+#playerBar .center > button { width: 40px; height: 40px; font-size: 1.5em; opacity: .3; border-radius: 50%; transition: all .3s; }
+#playerBar .center > button:hover { background: #0000000d; opacity: .7; filter: none; }
+#playerBar .center > button:active { background: #00000019; transform: scale(.95); }
+#playerBar .center > button.larger i { font-size: 1.15em; }
+#playerBar .center > button.play { width: 55px; height: 55px; font-size: 2.1em; opacity: 1; }
+#playerBar .volBtnBottom > button { width: 40px; min-width: 40px; height: 40px; opacity: .7; margin-right: 5px; font-size: 1.5em; border-radius: 50%; }
+#playerBar .volBtnBottom > button:hover { background: #0000000d; filter: none; }
+#playerBar .volBtnBottom .progress { height: 5px; }
+.playBtnColor #playerBar .center > button.play { background: var(--SimsvMainColor); color: white; font-size: 1.6em; width: 50px; height: 50px; margin: 0 5px; }
+.playBtnColor #playerBar .center > button:not(.play) { opacity: .5; }
+/* Under the open play page the bar is out of sight: it leaves without moving, and stays put while the page slides over it. */
+.playerShown #playerBar { bottom: -90px; transition: none; }
+.playerOpening #playerBar { bottom: 0; }
+#playPage { top: 0; z-index: 50; --SimsvMainColor: var(--SimAPTheme); }
+.darkPlayer #playPage { --SimAPTheme: #fffc!important; }
+.darkPlayer #playPage .progress .outerBar { background: #ffffff19; }
+.controls .buttons > button.active { color: var(--SimAPTheme); opacity: .7; }
+.largeVolumeControl > button:hover { color: var(--SimAPTheme); }
+/* 2024 SimAP .infoBar i: hover and press feedback, widening into the sleep countdown. */
+.controls .infoBar > button { flex-shrink: 0; width: 30px; height: 30px; border-radius: 15px; background: #00000006; color: #0009; font-size: 1.1em; transition: all .2s, font-size 0s; }
+.controls .infoBar > button i { background: transparent; color: inherit; }
+.controls .infoBar > button:hover { background: #0000000d; color: #000c; filter: none; }
+.controls .infoBar > button:active { background: #0000000d; color: #000c; transform: scale(.95); filter: none; }
+.sleepMode .controls .infoBar > button { width: 70px; font-size: .9em; font-variant-numeric: tabular-nums; }
+.darkPlayer .controls .infoBar > button { background: #ffffff06; color: #fff9; }
+.darkPlayer .controls .infoBar > button:hover, .darkPlayer .controls .infoBar > button:active { background: #ffffff0d; color: #fffc; }
+.controls .buttons > button, .largeVolumeControl > button { width: 50px; height: 50px; position: relative; font-size: 1.5em; transition: all .3s; opacity: .3; border-radius: 50%; }
+.controls .buttons > button:hover, .largeVolumeControl > button:hover { background: #0000000d; opacity: .7; filter: none; }
+.controls .buttons > button:active { transform: scale(.95); }
+.controls .buttons > button.larger i { font-size: 1.15em; }
+.controls .buttons > button.play { width: 60px; height: 60px; font-size: 2.1em; opacity: 1; }
+.largeVolumeControl { position: relative; }
+#largeVolumeBar { position: absolute; width: 120px; bottom: 58px; left: -35px; background: #fcfcfc; box-shadow: 0 3px 15px #0002; border-radius: 5px; }
+.controls .progressControl .progress { flex: 1; }
+#lyricsView { height: 100%; --normalColor: #0006; --activeColor: var(--SimAPTheme); --hoverColor: #0009; }
+#lyricsView .lyricLine { font-weight: 400; }
+.blurLyrics #lyricsView:not(.manualScroll) .lyricLine[data-blur="2"] { filter: blur(2px); }
+.blurLyrics #lyricsView:not(.manualScroll) .lyricLine[data-blur="3"] { filter: blur(3px); }
+.blurLyrics #lyricsView:not(.manualScroll) .lyricLine[data-blur="4"] { filter: blur(4px); }
+.blurLyrics #lyricsView:not(.manualScroll) .lyricLine[data-blur="5"] { filter: blur(5px); }
+/* A blurred line is readable while the pointer is on it. */
+.blurLyrics #lyricsView:not(.manualScroll) .lyricLine[data-blur]:hover { filter: none; }
+.darkPlayer #lyricsView { --normalColor: #fff3; --activeColor: #fffc; --hoverColor: #fff9; }
+.emptyLyrics { color: #0006; font-size: 1em!important; text-align: center; }
+.darkPlayer .emptyLyrics { color: #fff6; }
+#queueTracks { height: 100%; overflow: auto; }
+#queueTracks::before, #queueTracks::after { content: ""; display: block; height: 50%; }
+.queueRow { display: flex; align-items: center; height: 80px; padding: 0 10px; border-radius: 10px; transition: background .2s; }
+.queueRow:hover { background: #00000006; }
+.queueRow.current { background: #0000000d; }
+.queueRow img { min-width: 60px; width: 60px; height: 60px; margin-right: 10px; border-radius: 5px; object-fit: cover; }
+.queueRow > div { width: calc(100% - 100px); }
+.queueRow p { display: block; font-size: 1.1em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.queueRow small { display: block; font-size: .9em; opacity: .8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.queueRow > button { width: 30px; height: 30px; opacity: .3; font-size: 1em; }
+.queueRow > button:hover { opacity: .8; filter: none; }
+.queueRow.current > button { opacity: 0; pointer-events: none; }
+.list > #queueTracks { padding: 0; display: block; height: 100%; border-radius: 0; background: transparent; }
+.list::before, .list::after { display: none; }
+.coverAtmosphere { position: absolute; inset: 0; opacity: .2; pointer-events: none; transition: background-color .3s; }
+.coverAtmosphere::after { content: ""; position: absolute; inset: 0; background: linear-gradient(135deg, #ffffff19, #ffffff80); }
+.coverAtmosphere div { position: absolute; width: 100%; height: 120%; animation: atmosphereDrift 22s ease-in-out infinite alternate; }
+.coverAtmosphere div:nth-child(1) { left: -15%; top: -20%; }
+.coverAtmosphere div:nth-child(2) { right: -20%; bottom: -30%; animation-delay: -8s; animation-direction: alternate-reverse; }
+.coverAtmosphere div:nth-child(3) { left: 30%; top: 20%; animation-delay: -16s; }
+.staticBackdrop .coverAtmosphere div { animation: none; }
+body:not(.playing) .coverAtmosphere div, body:not(.playerShown) .coverAtmosphere div { animation-play-state: paused; }
+.darkPlayer .coverAtmosphere { opacity: .35; }
+.darkPlayer .coverAtmosphere div { opacity: .5; }
+#themeBackdrop { position: fixed; inset: 0; background-size: cover; background-position: center; opacity: .05; z-index: 40; pointer-events: none; }
+.themeBlur #themeBackdrop { filter: blur(30px); transform: scale(1.12); }
+.themeImage #rightPlaceholder img { visibility: hidden; }
+/* Settings: one card per section, rows separated by hairlines. */
+.settingsSection h3 { margin: 24px 4px 8px; font-size: 14px; opacity: .6; }
+.settingsSection:first-child h3 { margin-top: 12px; }
+.settingsCard { background: white; border-radius: 8px; }
+.settingsCard > .settingRow { background: transparent; border-radius: 0; margin: 0; padding: 14px 18px; }
+.settingsCard > .settingRow + .settingRow { border-top: 1px solid #0000000a; }
+.settingsCard .settingText { margin-right: 24px; }
+.settingsCard .settingText p { font-size: 13px; opacity: .6; line-height: 1.5; margin-top: 2px; }
+.settingRow.collapsing { overflow: hidden; transition: height .25s, padding .25s, opacity .25s; }
+.settingRow.measuring { transition: none; }
+.settingsCard > .settingRow.collapsed, .settingRow.collapsed { padding-block: 0; border-top-width: 0; opacity: 0; overflow: hidden; pointer-events: none; }
+.settingRow { display: flex; align-items: center; background: white; padding: 10px 15px; border-radius: 5px; margin-bottom: 5px; }
+.settingText { flex: 1; margin-right: 10px; }
+.settingText p { font-size: .9em; opacity: .8; line-height: 1.1em; margin-top: 3px; overflow-wrap: anywhere; }
+.settingControl { width: 150px; min-width: 150px; text-align: right; }
+.SimsvOptionsContainer { text-align: left; }
+/* A setting's list is as wide as its longest option, never narrower than the control, and opens
+   leftwards from the control's right edge. SimUI pins it to the control's width with !important. */
+.settingControl .input .SimsvOptionsContainer:not(dialog *) { left: auto !important; right: -1px; width: max-content !important; min-width: calc(100% + 2px); max-width: 420px; }
+/* The font list is long: it scrolls, and every family is shown in its own face. */
+.settingRow[data-setting-key="general.font"] .settingControl { width: 240px; }
+.settingRow[data-setting-key="general.font"] select { text-overflow: ellipsis; }
+.settingRow[data-setting-key="general.font"] .SimsvOptionsContainer { max-height: 340px; overflow-y: auto; }
+.settingRow[data-setting-key="general.font"] .SimsvOptionsContainer > div { font-size: 1.05em; }
+.settingSlider { width: 150px; }
+.unknownArtist { color: #0006; }
+.settingSlider .outerBar { background: #0000000d; }
+.toggleControl { position: relative; display: inline-flex; align-items: center; flex-shrink: 0; width: 35px; height: 20px; }
+.toggleControl > input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; margin: 0; cursor: default; z-index: 1; }
+.toggleControl > .toggle { pointer-events: none; }
+.badge { font-size: .8em; background: #00000019; opacity: .5; padding: 0 7px; margin-left: 5px; border-radius: 10px; }
+.pluginBody { padding-top: 90px; }
+.pluginCard { display: flex; align-items: center; gap: 20px; background: white; padding: 15px; border-radius: 5px; margin-bottom: 5px; }
+.pluginDetails { flex: 1; min-width: 0; }
+.pluginCard h2 { font-size: 1em; }
+.pluginCard p { opacity: .8; font-size: .9em; margin-top: 3px; }
+.pluginMeta { opacity: .5; font-size: .8em; margin: 3px 0; overflow-wrap: anywhere; }
+.pluginTools { display: flex; align-items: center; gap: 18px; }
+.pluginTools .iconButton, .pluginInstall .iconButton, .pluginDragHandle { width: 30px; height: 30px; border-radius: 5px; opacity: .6; transition: background .2s, opacity .2s; font-size: 18px; }
+.pluginTools .iconButton:hover, .pluginInstall .iconButton:hover, .pluginDragHandle:hover { background: #0000000d; opacity: 1; filter: none; }
+.pluginInstall { display: flex; align-items: center; gap: 10px; padding: 10px 15px; background: white; border-radius: 5px; }
+.pluginInstall > div { flex: 1; }
+.pluginInstall p { font-size: .9em; opacity: .8; margin-top: 3px; }
+#pluginCards { margin-top: 15px; }
+.dragGhost { position: fixed; z-index: 160; margin: 0; pointer-events: none; background: #fcfcfc; border-radius: 5px; box-shadow: 0 8px 24px #00000024; opacity: .96; }
+.dragGhost.queueRow { background: #f4f4f4; border-radius: 10px; }
+.darkPlayer .dragGhost.queueRow { background: #262626; color: #ffffffe6; }
+.dragSource { opacity: 0; }
+.dragSorting .trackRow, .dragSorting .queueRow, .dragSorting .pluginCard { transition: transform .15s; }
+.dragUp { transform: translateY(calc(-1 * var(--dragStep))); }
+.dragDown { transform: translateY(var(--dragStep)); }
+.pluginDragHandle { flex-shrink: 0; letter-spacing: -3px; padding: 0 3px 0 0; font-family: inherit; }
+.eqPresets { display: flex; flex-wrap: wrap; gap: 5px; }
+.aboutPage { position: absolute; inset: 0 0 80px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.aboutPage img { width: 96px; height: 96px; margin-bottom: 20px; }
+.aboutPage h1 { font-size: 24px; }
+.aboutPage p { opacity: .6; margin-top: 6px; }
+.aboutPage small { position: absolute; bottom: 30px; font-size: 13px; opacity: .4; }
+.pluginError { color: #c54c4c; }
+.logView { background: #111; color: #f5f5f5; padding: 16px 18px; border-radius: 5px; min-height: 220px; max-height: 50vh; white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; font: 13px/1.6 Consolas, "Courier New", monospace; user-select: text; }
+/* 2024 #downloadContainer: the progress fills the row from the left behind its text; the status tints the row. */
+.downloadBody { padding-top: 90px; }
+.downloadRow { background: white; width: 100%; border-radius: 5px; margin-bottom: 5px; padding: 10px 15px; position: relative; height: 65px; overflow: hidden; transition: background .2s; }
+.downloadRow[data-status="success"] { background: #eff6ef; }
+.downloadRow[data-status="error"] { background: #fcefef; }
+.downloadRow > .info { display: flex; align-items: center; white-space: nowrap; position: absolute; inset: 0; z-index: 5; padding: 0 15px; }
+.downloadRow .music { display: flex; flex-direction: column; width: calc(100% - 150px); }
+.downloadRow .music > b { width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.downloadRow .music > span { display: block; opacity: .8; font-size: .9em; margin-top: 3px; }
+.downloadRow .buttons { display: flex; justify-content: flex-end; width: 150px; }
+.downloadRow .buttons > button { width: 30px; height: 30px; font-size: 1.1em; border-radius: 50%; transition: background .2s; }
+.downloadRow .buttons > button:hover { background: #0000000d; filter: none; }
+.downloadRow .buttons > button:active { background: #00000019; filter: none; }
+.downloadRow:not([data-status="error"]) .errorOnly, .downloadRow:not([data-status="success"]) .successOnly { display: none; }
+.downloadRow > .progressBar { transition: width .2s, opacity .2s; position: absolute; inset: 0 auto 0 0; background: var(--SimsvSubColor); width: var(--progressWidth, 0%); }
+.downloadRow:not([data-status="download"]) > .progressBar { opacity: 0; }
+/* Installer: what is being installed, then its permissions, which open into a list of switches. */
+.modalContainer.installDialog:not(.wideDialog) > div:not(.eqDialog) > .modalContent { line-height: normal; }
+.installHeader > div { min-width: 0; }
+.installName { font-size: 18px; line-height: 1.3; }
+.installMeta { font-size: 13px; opacity: .6; margin-top: 2px; }
+.installDesc { font-size: 14px; line-height: 1.5; opacity: .8; margin-top: 14px; }
+.installSummary { display: flex; align-items: center; width: 100%; margin-top: 16px; padding: 12px 16px; background: white; color: inherit; border-radius: 8px; text-align: left; transition: filter .2s, border-radius .2s; }
+.installSummary:disabled { filter: none !important; }
+.installSummary > span { flex: 1; }
+.installSummary > small { font-size: 13px; opacity: .6; margin-right: 8px; }
+.installSummary > i { opacity: .45; transition: transform .2s; }
+.installSummary:disabled > i { visibility: hidden; }
+.installSummary.open { border-radius: 8px 8px 0 0; }
+.installSummary.open > i { transform: rotate(90deg); }
+.permissionList.installPermissions { max-height: 0; overflow: hidden auto; border-radius: 0 0 8px 8px; transition: max-height .25s; }
+.permissionList.installPermissions.open { max-height: 250px; box-shadow: inset 0 1px #0000000d; }
+.installNote { font-size: 13px; line-height: 1.5; opacity: .6; margin-top: 14px; }
+.modalContainer > div.eqDialog { width: 740px; max-width: calc(100vw - 40px); }
+.eqDialog > .modalHeader { display: flex; align-items: center; gap: 18px; }
+.eqDialog > .modalHeader > div { flex: 1; width: auto; }
+.modalContainer > .eqDialog > .modalHeader > .eqMode { flex: none; width: auto; display: flex; gap: 6px; font-size: 1rem; font-weight: 400; }
+.eqMode > button { padding-inline: 16px; }
+.eqBands { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); margin: 20px 0 24px; }
+.eqBand { display: flex; flex-direction: column; align-items: center; font-size: 12px; gap: 12px; min-width: 0; }
+.eqBand > span { width: 100%; text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.eqSlider { width: 26px; height: 156px; position: relative; }
+.eqSlider .progress { position: absolute; left: -65px; top: 74px; width: 156px; transform: rotate(-90deg); }
+.eqSlider .progress input { height: 26px; top: -10px; margin: 0; }
+.eqPresets { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.eqPresets button { padding-inline: 4px; white-space: nowrap; }
+.eqJson { margin-top: 12px; }
+.eqJson .input { width: 100%; margin: 0; }
+.eqJson textarea { height: 300px; font: 12px/14px Consolas, monospace; resize: vertical; }
+.eqJsonStatus { flex: 1; min-width: 0; align-self: center; margin-right: 8px; font-size: 13px; color: #0008; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.eqJsonStatus.invalid { color: #c54c4c; }
+/* The play and pause glyphs are one shape: two halves of the triangle become the two bars. */
+/* Outlines follow the measured RemixIcon glyphs (play 15×18, bars 2×18 in a 24 em, the triangle set 1.25 right
+   as the old 3.5px padding did); the round stroke supplies the corner radius. */
+.playGlyph { display: block; width: 1em; height: 1em; fill: currentColor; stroke: currentColor; stroke-linejoin: round; }
+.playGlyph path { stroke-width: 1.6px; transition: d .3s cubic-bezier(.3, .7, 0, 1), stroke-width .3s; }
+.playGlyph path:first-child { d: path("M7 3.6 L13.75 7.8 L13.75 16.2 L7 20.4 Z"); }
+.playGlyph path:last-child { d: path("M13.75 7.8 L20.5 12 L20.5 12 L13.75 16.2 Z"); }
+.playing .playGlyph path { stroke-width: .6px; }
+.playing .playGlyph path:first-child { d: path("M6.8 3.3 L8.2 3.3 L8.2 20.7 L6.8 20.7 Z"); }
+.playing .playGlyph path:last-child { d: path("M16.8 3.3 L18.2 3.3 L18.2 20.7 L16.8 20.7 Z"); }
+/* Dialogs share one 24px gutter: header, content and the button row all align to it. */
+.modalContainer .modalContent { text-align: left; }
+.modalContainer::backdrop { background: transparent; }
+.modalContainer > div { width: 440px; max-width: calc(100% - 64px); }
+.modalContainer > div > .modalHeader { padding: 22px 24px 16px; }
+.modalContainer > div > .modalHeader > div:first-child { font-size: 18px; font-weight: 400; }
+.modalContainer > div > .modalHeader > small { font-size: 13px; opacity: .6; margin-top: 2px; }
+.modalContainer > div > .modalHeader > small:empty { display: none; }
+.modalContainer > div > .modalContent { padding: 0 24px 22px; overflow-y: auto; overflow-wrap: anywhere; }
+.modalContainer:not(.wideDialog) > div:not(.eqDialog) > .modalContent { line-height: 1.6; }
+.modalContainer > div > .modalContent > .buttons { justify-content: flex-end; padding-top: 22px; gap: 8px; line-height: normal; }
+.modalContainer > div > .modalContent > .buttons > button { flex: unset; width: auto; min-width: 76px; padding-inline: 20px; }
+.modalContainer > div > .modalContent > form:not(.timerCustom) { display: grid; gap: 8px; }
+.modalContainer > div > .modalContent > form > .input { margin: 0; }
+.modalContainer.wideDialog > div { width: 640px; }
+.modalContainer.permissionsDialog > div { width: 520px; }
+.permissionList { background: white; border-radius: 8px; padding: 0 16px; line-height: normal; }
+.permissionRow { display: flex; align-items: center; gap: 24px; padding: 13px 0; }
+.permissionRow + .permissionRow { border-top: 1px solid #0000000d; }
+.permissionRow > div { flex: 1; min-width: 0; }
+.permissionRow p { font-size: 13px; opacity: .6; line-height: 1.5; margin-top: 2px; }
+.childPermission { padding-left: 20px; }
+.childPermission span { font-size: 15px; }
+#connectionBanner { position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%); z-index: 200; background: #fff2db; border-radius: 5px; padding: 10px 20px; }
+@keyframes atmosphereDrift { from { transform: translate(-5%, -5%) rotate(-12deg) scale(1); } to { transform: translate(15%, 12%) rotate(25deg) scale(1.15); } }
+.timerPresets { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; line-height: normal; }
+.timerPresets button { padding-inline: 4px; white-space: nowrap; }
+.timerCustom { display: flex; align-items: center; gap: 16px; line-height: normal; }
+.timerCustom > .input { flex: 1; min-width: 0; margin: 0; }
+.timerCustom > .input > span { padding-right: 12px; opacity: .5; }
+.speedValue { text-align: center; font-size: 28px; line-height: 1.2; font-variant-numeric: tabular-nums; margin: 4px 0 18px; }
+.speedSlider { display: flex; align-items: center; gap: 14px; font-size: 13px; line-height: normal; padding-bottom: 4px; }
+.speedSlider > span { opacity: .5; font-variant-numeric: tabular-nums; }
+.speedSlider > .progress { flex: 1; }
+#playerBar .info.trackChanging, .musicInfo.trackChanging { animation: trackInfoChange .32s ease-out; }
+#largeCover.trackChanging, #lyricsView.trackChanging { animation: trackContentChange .36s ease-out; }
+#playerBar .info.trackLoading, .musicInfo.trackLoading, #largeCover.trackLoading, #lyricsView.trackLoading { animation: trackContentLeave .12s ease-out forwards; }
+@keyframes trackInfoChange { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes trackContentChange { from { opacity: .15; } to { opacity: 1; } }
+@keyframes trackContentLeave { to { opacity: 0; } }
+/* Resting while the play page slides in; the slide itself is the transform on #playPage. */
+.playerOpening #playPage * { transition: none !important; animation-play-state: paused !important; }
+/* Coming from the main window, the cover, title and lyrics are simply there: no fade plays under the slide or after it. */
+.playerOpening #playPage :is(.trackChanging, .trackLoading) { animation: none !important; }
+.trackTable td > m { background: var(--SimsvSubColor); }

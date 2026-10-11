@@ -1,0 +1,27 @@
+# Build output, user data, caches
+/build/
+
+# CEF SDK and sources: the build downloads the pinned distribution
+/cef/chromiumembedded-cef-*/
+/cef/cef_binary_*
+/cef/*.zip
+/cef/*.tar.bz2
+/cef/taskbar_check.c
+
+# Kept out of the repository
+/AGENTS.md
+/dev_reference/
+/extensions/
+/docs/
+
+# Development scripts; the build only needs the two below
+/tools/*
+!/tools/setup-cef.ps1
+!/tools/prepare-ui.ps1
+
+# Audio and extension packages never belong here
+*.mp3
+*.flac
+*.ogg
+*.wav
+*.simex

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <title>编辑元数据</title>
+    <!-- /.sim/ 是宿主提供给扩展页面的 SimUI 与字体，页面其余文件来自扩展目录 -->
+    <link rel="stylesheet" href="/.sim/fonts.css">
+    <link rel="stylesheet" href="/.sim/simui.css">
+    <link rel="stylesheet" href="editor.css">
+    <link rel="stylesheet" href="/.sim/runtime.css" id="runtimeCss">
+    <script src="/.sim/cssRules.js" defer></script>
+    <script src="/.sim/simui.js" defer></script>
+    <script src="editor.js" defer></script>
+</head>
+<body>
+    <header id="editorTitle">编辑元数据</header>
+    <main id="editorForm">
+        <section id="fieldColumn">
+            <div class="field"><span>标题</span><div class="input allowEmpty"><input id="tagTitle"></div></div>
+            <div class="fieldRow">
+                <div class="field"><span>艺术家</span><div class="input allowEmpty"><input id="tagArtist"></div></div>
+                <div class="field"><span>专辑艺术家</span><div class="input allowEmpty"><input id="tagAlbumArtist"></div></div>
+            </div>
+            <div class="field"><span>专辑</span><div class="input allowEmpty"><input id="tagAlbum"></div></div>
+            <div class="fieldRow">
+                <div class="field"><span>年份</span><div class="input allowEmpty"><input id="tagYear"></div></div>
+                <div class="field"><span>风格</span><div class="input allowEmpty"><input id="tagGenre"></div></div>
+            </div>
+            <div class="fieldRow">
+                <div class="field"><span>音轨号</span><div class="input allowEmpty"><input id="tagTrack"></div></div>
+                <div class="field"><span>碟号</span><div class="input allowEmpty"><input id="tagDisc"></div></div>
+            </div>
+            <div class="fieldRow">
+                <div class="field"><span>作曲家</span><div class="input allowEmpty"><input id="tagComposer"></div></div>
+                <div class="field"><span>作词家</span><div class="input allowEmpty"><input id="tagLyricist"></div></div>
+            </div>
+            <div class="field"><span>注释</span><div class="input allowEmpty"><input id="tagComment"></div></div>
+            <div class="coverRow">
+                <div id="coverBox"><i>&#xEF83;</i><img id="coverImage" hidden></div>
+                <div class="coverInfo">
+                    <div id="coverMime"></div>
+                    <div id="coverSize"></div>
+                    <div id="coverBytes"></div>
+                    <div class="coverButtons"><button id="coverPick" class="sub">更换封面</button><button id="coverRemove" class="sub">移除封面</button></div>
+                </div>
+            </div>
+        </section>
+        <section id="lyricsColumn" class="field">
+            <span>歌词</span>
+            <div class="input allowEmpty"><textarea id="tagLyrics" spellcheck="false"></textarea></div>
+        </section>
+    </main>
+    <footer id="editorFooter">
+        <span id="fileName"></span>
+        <button id="cancelButton" class="sub">取消</button>
+        <button id="saveButton" disabled>保存</button>
+    </footer>
+    <input id="coverFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+</body>
+</html>

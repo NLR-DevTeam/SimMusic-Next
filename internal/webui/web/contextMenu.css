@@ -1,0 +1,25 @@
+/* The menu reuses SimUI's .dropdown.menu; these rules replace its item padding with inset rows. */
+#contextMenu, .contextSubmenu { min-width: 180px; padding: 4px; background: #fffffff2; border: 1px solid #0000000d; box-shadow: 0 8px 24px #00000024; border-radius: 8px; }
+#contextMenu { width: max-content; max-width: min(320px, calc(100vw - 8px)); z-index: 150; backdrop-filter: none; max-height: calc(100vh - 8px); overflow-y: auto; }
+#contextMenu > .contextItem, #contextMenu > .contextSeparator { padding: 0; overflow: visible; }
+#contextMenu > .contextSubmenu { padding: 4px; width: max-content; max-width: min(320px, calc(100vw - 8px)); overflow-y: auto; }
+/* A percentage width would leave the button out of the menu's intrinsic width, so the menu could come out narrower
+   than its longest label. The row is a flex line instead, and the button fills it. */
+#contextMenu .contextItem { display: flex; }
+#contextMenu button { display: flex; flex: 1 1 auto; min-width: 0; align-items: center; gap: 5px; padding: 6px 10px; border-radius: 5px; font-size: 14px; text-align: left; white-space: nowrap; }
+:where(#contextMenu) button { background: transparent; color: inherit; }
+#contextMenu button.clickable { filter: none; }
+#contextMenu button.clickable:not(.active):hover { background: #0000000d; }
+#contextMenu button.clickable:not(.active):active { background: #00000014; }
+/* An explicit width: an empty icon cell would otherwise count as zero when the menu measures itself. */
+#contextMenu button > i { flex: 0 0 16px; width: 16px; text-align: center; font-size: 16px; opacity: .75; }
+#contextMenu .noIcons > .contextItem > button > i:not(.contextArrow), #contextMenu.noIcons > .contextItem > button > i:not(.contextArrow) { display: none; }
+/* Labels size the menu up to its maximum width; a longer one is cut with an ellipsis instead of spilling out. */
+#contextMenu button > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#contextMenu button > .contextArrow { margin-left: 14px; flex-basis: 12px; width: 12px; font-size: 13px; opacity: .45; }
+.contextSubmenu { position: fixed; z-index: 151; visibility: hidden; opacity: 0; pointer-events: none; transform: translateX(-5px); transition: opacity .15s, transform .15s, visibility .15s; max-height: calc(100vh - 8px); overflow-y: auto; }
+.contextSubmenu.active { visibility: visible; opacity: 1; pointer-events: auto; transform: none; }
+#contextMenu:not(.active) .contextSubmenu { visibility: hidden; pointer-events: none; }
+#contextMenu .contextSeparator { height: 1px; margin: 4px 6px; background: #0000000d; }
+.searchTitle .inputGroup > .input, .searchTitle .inputGroup > button { height: 40px; box-sizing: border-box; margin: 0; }
+.searchTitle .inputGroup { align-items: stretch; }

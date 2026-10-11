@@ -1,0 +1,142 @@
+
+/*
+ *  SimUI v5
+ *  (C) LinkiumPlus Software
+ */
+
+
+
+
+/* 公用 */
+
+html{background:#F9F9FB;font-size:16px;font-family:'hmsans','微软雅黑';--SimsvMainColor:#3BB0FE;--SimsvSubColor:#E8F5FF;}
+*{user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;}
+input,textarea{-webkit-user-select:text;user-select:text;}
+body{margin:0;}
+i{font-family:'icon','hmsans','微软雅黑';font-style:normal;font-weight:normal;}
+img{pointer-events:none;}
+img[rounded]{border-radius:50%;}
+*{box-sizing:border-box;scrollbar-width:none;outline:none;caret-color:var(--SimsvMainColor);}
+*[hidden]{display:none!important;}
+::-webkit-scrollbar{display:none;}
+::selection{background:var(--SimsvSubColor);color:black;}
+a{color:var(--SimsvMainColor);text-decoration:none;cursor:default;position:relative;display:inline-block;transition:opacity .1s}
+a::before{content:'';position:absolute;bottom:0;height:.5px;width:100%;background:var(--SimsvMainColor);transform:scaleX(0);transition:transform .1s;transform-origin:right;}
+a:hover::before,a:active::before{transform:scaleX(1);left:0;transform-origin:left;}
+a:active{opacity:.8;}
+button{background:var(--SimsvMainColor);color:white;border:0;border-radius:5px;padding:5px 20px;font-size:1rem;transition:filter .2s;font-family:inherit;margin:5px 0;}
+button.sub{background:var(--SimsvSubColor);color:var(--SimsvMainColor);}
+button:hover{filter:brightness(.95);}
+button:active{filter:brightness(.9);}
+button:disabled{filter:grayscale(1)!important;}
+.clickable{transition:background .2s,color .2s,opacity .2s;}
+.clickable:hover{background:#00000003;}
+.clickable:active{background:#00000008;color:var(--SimsvMainColor);}
+.clickable.active:not(.disabled){background:var(--SimsvSubColor);color:var(--SimsvMainColor);}
+.clickable.disabled{background:transparent;color:#000000AA;pointer-events:none;}
+
+/* 模窗组件 */
+.modalContainer{max-width:unset;max-height:unset;padding:0;display:block;border:0;position:fixed;z-index:100;background:rgba(0,0,0,.2);top:0;left:-1px;width:calc(100% + 2px);height:100%;opacity:0;pointer-events:none;transition:opacity .3s;}
+.modalContainer:-internal-dialog-in-top-layer::backdrop{display:none;}
+.modalContainer>div{position:absolute;bottom:20px;left:0;right:0;margin:0 auto;background:#F9F9FB;border-radius:20px;width:calc(100% - 40px);transform:translateY(50px) scale(.9);transition:transform .3s;overflow:hidden;transition-timing-function:cubic-bezier(.34, 1.56, .64, 1)!important;}
+.modalContainer>div>.modalHeader{padding:20px 25px 10px 25px;}
+.modalContainer>div>.modalHeader>div{width:100%;font-size:1.3em;font-weight:bold;}
+.modalContainer>div>.modalHeader>small{font-size:.9em;opacity:.8;display:block;}
+.modalContainer>div>.modalContent{padding:0 25px 20px 25px;overflow-y:scroll;max-height:calc(100vh - 200px);text-align:justify;}
+.modalContainer>div>.modalContent>.buttons{text-align:right;display:flex;gap:10px;padding-top:10px;}
+.modalContainer>div>.modalContent>.buttons>button{flex:1;padding:8px 0;}
+.modalContainer[open]{opacity:1;pointer-events:all;}
+.modalContainer[open]>div{transform:none;}
+html.simsvScrollLock{overflow:hidden!important;}
+@media screen and (min-width: 550px) {
+	.modalContainer>div{top:0;bottom:0;left:0;right:0;max-width:calc(100% - 50px);width:500px;height:fit-content;border-radius:10px;margin:auto;transform:scale(.9);border:1px solid rgba(0,0,0,.05);}
+	.modalContainer>div>.modalContent>.buttons{justify-content:flex-end;padding-top:8px;gap:8px;}
+	.modalContainer>div>.modalContent>.buttons>button{padding:5px 20px;flex:unset;}
+}
+
+/* 输入组件 */
+input:not([type^='password']),select,textarea{font-family:inherit;color:inherit;}
+input[type='password']::placeholder{font-family:'hmsans';}
+.input textarea{resize:vertical;min-height:50px;padding:8px 10px!important;}
+.input div[contenteditable]{width:100%;padding:8px 10px;overflow:scroll;user-select:text;}
+.input div[contenteditable] *{user-select:text;}
+.input{background:#FCFCFC;border:1px solid rgba(0,0,0,.05);transition:border .2s,background .2s;margin:5px 0;border-radius:5px;display:flex;align-items:center;white-space:nowrap;position:relative;cursor:text;overflow:hidden;}
+.input.select,select.input{cursor:default;position:relative;overflow:visible;}
+input.input, select.input, textarea.input{padding:8px 10px;}
+/* .input 自带 overflow:hidden，直接加在 textarea 上时会导致滚轮无法滚动内容 */
+textarea.input{overflow:auto;}
+.input i{color:#5C5C5C;padding:10px 0 10px 10px;transition:color .2s,opacity .2s;pointer-events:none;}
+.input i.clickable{color:#505050;padding:10px 10px 10px 0;font-size:.9em;cursor:default;pointer-events:all;background:transparent!important;}
+.input:not(.select):not(div:focus-within) i.clickable,.input.empty:not(.select) i.clickable,.input.select:not(div:hover,div:has(.dropdownActive)) i.clickable{color:transparent;pointer-events:none;}
+.input select.safari{pointer-events:unset!important;}
+.input:not(.select) i.clickable:hover{color:var(--SimsvMainColor);}
+.input:not(.select) i.clickable:active{color:var(--SimsvMainColor);opacity:.8;}
+.input input,.input select,.input textarea{box-shadow:0 0 0 100px #FCFCFC inset;transition:box-shadow .2s;width:100%;appearance:none;background:transparent;border:0;padding:5px 10px;font-size:1em;}
+.input:not(.select):focus-within,.input.select:hover,.input.dropdownActive{border:1px solid var(--SimsvMainColor);background:white;}
+.input:focus-within i:not(.clickable){color:black;}
+.input:focus-within input,.input:hover select,.input:focus-within textarea{box-shadow:0 0 0 100px white inset;}
+.input.warning{background:var(--SimsvSubColor)!important;animation:shake .1s infinite linear;}
+.input.warning input,.input.warning select,.input.warning textarea{box-shadow:0 0 0 100px var(--SimsvSubColor) inset;}
+/* 弹窗内的选项列表沿用 .dropdown 的 fixed 定位，absolute 会撑大弹窗内容的滚动区域 */
+.input .SimsvOptionsContainer:not(dialog *){position:absolute;left:-1px!important;top:45px!important;width:calc(100% + 2px)!important;}
+.input .SimsvOptionsContainer>div::before{content:'';width:25px;font-family:'icon';display:inline-block;}
+.input .SimsvOptionsContainer>div.active::before{content:'\EB7B';}
+@keyframes shake{50%{transform:translateX(-3px);}100%{transform:translateX(3px);}}
+
+/* 进度条组件 */
+.progress{display:block;position:relative;height:7px;width:100%;}
+.progress .outerBar{position:absolute;inset:0;background:#00000010;border-radius:100px;overflow:hidden;pointer-events:none;}
+.progress .outerBar .bar{position:absolute;top:0;left:0;bottom:0;transition:all .2s;background:var(--SimsvMainColor);}
+.progress .dot{width:12px;height:12px;background:var(--SimsvMainColor);border-radius:50%;position:absolute;top:0;bottom:0;margin:auto;}
+.progress:hover .dot{transform:scale(1.2);transition:all .2s;box-shadow:0 0 5px 0 #00000020;}
+.progress:active .dot{transform:scale(.9);}
+.progress input{position:absolute;inset:0;z-index:5;width:100%;opacity:0;}
+.progress.readonly{pointer-events:none;}
+.progress.readonly .dot{transform:scale(0);}
+
+/* 下拉组件 */
+.dropdown{position:fixed;background:#F9F9FBEE;backdrop-filter:blur(20px);border-radius:5px;box-shadow:0 0 30px #00000015;transform-origin:top;transition:transform .2s,opacity .2s;z-index:50;}
+.dropdown.bottom{transform-origin:bottom;}
+.dropdown:not(.active){opacity:0;pointer-events:none;transform:translateY(-10px);}
+.dropdown.bottom:not(.active){transform:translateY(10px);}
+.dropdown.menu{padding:10px 0;width:150px;}
+.dropdown.menu>div{padding:6px 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+button.dropdownActive{filter:brightness(.9)!important;}
+
+/* 消息组件 */
+#SimsvToastContainer{position:fixed;left:0;right:0;bottom:10vh;padding:0 max(calc(50vw - 150px), 50px);display:flex;flex-direction:column-reverse;align-items:center;z-index:101;pointer-events:none;}
+#SimsvToastContainer>div{background:var(--SimsvMainColor);color:white;padding:7.5px 15px;border-radius:5px;margin-bottom:20px;animation:toastFadeIn .3s;box-shadow:0 7px 15px 0 rgba(0,0,0,.1);display:flex;align-items:center;max-width:100%;pointer-events:all;}
+#SimsvToastContainer>div>i{margin-right:7.5px;}
+#SimsvToastContainer>div>span{display:block;overflow-wrap:anywhere;text-align:justify;}
+#SimsvToastContainer>div.inactive{transition:all .2s;opacity:0;color:var(--SimsvMainColor);transform:scale(.98);height:var(--clientHeight);}
+#SimsvToastContainer>div.inactive.heightFade{transition:all .1s;height:0px;margin-bottom:0;padding:0;}
+@keyframes toastFadeIn{from{opacity:0;transform:scale(.95) translateY(5px);box-shadow:none;}to{opacity:1;transform:none;box-shadow:0 7px 15px 0 rgba(0,0,0,.1);}}
+
+/* 骨架屏 */
+.skeleton {border-radius:5px;background:#00000005!important;position:relative;overflow:hidden;color:transparent!important;display:block;width:fit-content;pointer-events:none;}
+.skeleton *{opacity: 0!important;}
+.skeleton::before {content:"";display:block;position:absolute;top:0;left:0;width:100%;height:100%;background:linear-gradient(90deg, #00000000 0%, #00000010 50%, #00000000 100%);transform:translateX(-100%);animation:shimmer 1.5s infinite;}
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+
+/* 页面导航 */
+.pagination>button{padding:0;width:35px;height:35px;margin:5px 2.5px;}
+
+/* 复选框：主题色圆角方框，选中时填充主题色并显示对勾 */
+input[type=checkbox]{appearance:none;-webkit-appearance:none;width:16px;height:16px;margin:3px 3px 3px 4px;vertical-align:-3px;flex-shrink:0;border:1px solid rgba(0,0,0,.25);border-radius:4px;background:white center/12px no-repeat;transition:background-color .2s,border-color .2s,box-shadow .2s;cursor:default;}
+input[type=checkbox]:hover,input[type=checkbox]:active{border-color:var(--SimsvMainColor);}
+input[type=checkbox]:active{outline:none;box-shadow:0 0 0 3px var(--SimsvSubColor);}
+input[type=checkbox]:checked{border-color:var(--SimsvMainColor);background-color:var(--SimsvMainColor);background-image:linear-gradient(var(--SimsvMainColor),var(--SimsvMainColor)),url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Cpath d=%27M3.5 8.5l3 3 6-7%27 fill=%27none%27 stroke=%27white%27 stroke-width=%272%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27/%3E%3C/svg%3E");background-size:0 100%,12px;background-position:right center,center;background-repeat:no-repeat;transition:border-color .2s,box-shadow .2s;animation:simsvCheckDraw .25s ease-out;}
+@keyframes simsvCheckDraw{from{background-size:100% 100%,12px;}}
+input[type=checkbox]:disabled{opacity:.5;pointer-events:none;}
+input[type=radio]{appearance:none;-webkit-appearance:none;width:16px;height:16px;margin:3px 3px 3px 4px;vertical-align:-3px;flex-shrink:0;border:1px solid rgba(0,0,0,.25);border-radius:50%;background:white;box-shadow:inset 0 0 0 0 var(--SimsvMainColor);transition:border-color .2s,box-shadow .2s;cursor:default;}
+input[type=radio]:hover,input[type=radio]:active{border-color:var(--SimsvMainColor);}
+input[type=radio]:active{outline:none;box-shadow:inset 0 0 0 0 var(--SimsvMainColor),0 0 0 3px var(--SimsvSubColor);}
+input[type=radio]:checked{border-color:var(--SimsvMainColor);box-shadow:inset 0 0 0 5px var(--SimsvMainColor);}
+input[type=radio]:checked:active{box-shadow:inset 0 0 0 5px var(--SimsvMainColor),0 0 0 3px var(--SimsvSubColor);}
+input[type=radio]:disabled{opacity:.5;pointer-events:none;}
+
+
+
+
+
+

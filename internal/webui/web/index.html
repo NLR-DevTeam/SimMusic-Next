@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SimMusic Next</title>
+    <link rel="stylesheet" href="simui.v5.css">
+    <link rel="stylesheet" href="layout.css">
+    <link rel="stylesheet" href="app.css">
+    <link rel="stylesheet" href="toggle.css">
+    <link rel="stylesheet" href="colorPicker.css">
+    <link rel="stylesheet" href="contextMenu.css">
+    <link rel="stylesheet" href="runtime.css" id="runtimeCss">
+    <script src="cssRules.js" defer></script>
+    <script src="simui.v5.js" defer></script>
+    <script src="colorPicker.js" defer></script>
+    <script src="playerTheme.js" defer></script>
+    <script src="menuIcons.js" defer></script>
+    <script src="contextMenu.js" defer></script>
+    <script src="musicIndex.js" defer></script>
+    <script src="app.js" defer></script>
+</head>
+<body class="hideList">
+    <header id="titleBar">
+        <div class="titleActions">
+            <button id="collapseButton" class="titleButton windowsIcon" title="收起播放器" hidden>&#xEAB4;</button>
+            <button id="desktopButton" class="titleButton" title="桌面歌词">词</button>
+            <button id="minimizeButton" class="titleButton windowsIcon" title="最小化">&#xEABA;</button>
+            <button id="maximizeButton" class="titleButton windowsIcon" title="最大化 / 还原">&#xEAB9;</button>
+            <button id="closeButton" class="titleButton windowsIcon closeButton" title="关闭">&#xEAB8;</button>
+        </div>
+    </header>
+    <aside id="sidebar" class="left">
+        <img src="assets/logo.svg">
+        <nav id="sidebarNav" class="leftBar"></nav>
+    </aside>
+    <div id="sideResizer" title="调整侧栏宽度"></div>
+    <main id="mainContent" class="right"></main>
+    <footer id="playerBar" class="bottom">
+        <div id="seekBar" class="progress" min="0" max="1" value="0"></div><div class="progressBefore"></div><div class="progressAfter"></div>
+        <div class="info">
+            <button id="miniCoverButton" class="plainButton img" title="打开播放页"><img id="miniCover" src="assets/placeholder.svg"></button>
+            <div class="musicInfoBottom"><b id="miniTitle">未在播放</b><div id="miniArtist">未知艺术家</div></div>
+        </div>
+        <div class="center">
+            <button id="modeButton" class="iconButton" title="列表循环"><i>&#xF072;</i></button>
+            <button id="previousButton" class="iconButton larger" title="上一首"><i>&#xF140;</i></button>
+            <button id="toggleButton" class="iconButton play" title="播放 / 暂停"><svg class="playGlyph" viewBox="0 0 24 24"><path/><path/></svg></button>
+            <button id="nextButton" class="iconButton larger" title="下一首"><i>&#xF144;</i></button>
+            <button id="queueButton" class="iconButton" title="播放队列"><i>&#xF011;</i></button>
+        </div>
+        <div class="volume"><div class="volBtnBottom"><button id="muteButton" class="iconButton" title="静音"><i>&#xF2A2;</i></button><div id="volumeBar" class="progress" min="0" max="1" value="0.8"></div></div></div>
+        <span id="timeLabel" hidden></span>
+    </footer>
+    <section id="playPage" hidden>
+        <div id="coverAtmosphere" class="coverAtmosphere"><div></div><div></div><div></div></div>
+        <div class="playerContainer">
+            <div class="controls">
+                <img id="largeCover" src="assets/placeholder.svg">
+                <div class="infoBar"><div class="musicInfo"><b id="largeTitle">未在播放</b><div id="largeArtist">未知艺术家</div></div><button id="trackMoreButton" class="iconButton" title="更多操作"><i>&#xEF77;</i></button></div>
+                <div class="progressControl"><span id="positionLabel">0:00</span><div id="largeSeekBar" class="progress" min="0" max="1" value="0"></div><span id="durationLabel">0:00</span></div>
+                <div class="buttons">
+                    <button id="largeQueueButton" class="iconButton listBtn" title="播放队列"><i>&#xF011;</i></button>
+                    <button id="largeModeButton" class="iconButton" title="播放模式"><i>&#xF072;</i></button>
+                    <button id="largePreviousButton" class="iconButton larger" title="上一首"><i>&#xF140;</i></button>
+                    <button id="largeToggleButton" class="iconButton play" title="播放 / 暂停"><svg class="playGlyph" viewBox="0 0 24 24"><path/><path/></svg></button>
+                    <button id="largeNextButton" class="iconButton larger" title="下一首"><i>&#xF144;</i></button>
+                    <div class="largeVolumeControl"><button id="largeVolumeButton" class="iconButton" title="音量"><i>&#xF2A2;</i></button><div id="largeVolumeBar" class="progress" min="0" max="1" value="0.8" hidden></div></div>
+                    <button id="lyricsButton" class="iconButton lyricsBtn" title="歌词"><i>&#xF201;</i></button>
+                </div>
+                <div hidden><button id="sleepButton">睡眠定时</button><button id="speedButton">1× 倍速</button><button id="eqButton">均衡器</button></div>
+            </div>
+            <div id="lyricsPanel" class="lyrics"><div id="lyricsView" class="lyricsScroll"><div class="emptyLyrics">暂无歌词</div></div></div>
+            <aside id="queuePanel" class="list" hidden><div class="panelHeader" hidden><span id="queueCount"></span><button id="clearQueueButton">清空</button><button id="hideQueueButton">关闭</button></div><div id="queueTracks"></div></aside>
+        </div>
+    </section>
+    <div id="themeBackdrop"></div>
+    <div id="contextMenu" class="dropdown menu"></div>
+    <div id="connectionBanner" hidden>正在重新连接音频内核…</div>
+</body>
+</html>

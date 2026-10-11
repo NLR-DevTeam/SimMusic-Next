@@ -1,0 +1,6 @@
+#include <windows.h>
+1 ICON "../internal/webui/web/assets/tray.ico"
+STRINGTABLE
+BEGIN
+    1 "SimMusic Next"
+END
