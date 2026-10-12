@@ -15,8 +15,6 @@ h3 { font-size: 1em; font-weight: 400; }
 .titleButton:active { background: #00000033; opacity: .8; }
 .titleButton.closeButton:hover { background: #e81123; color: white; }
 .titleButton.active { color: #1e9fff; }
-.playerShown #desktopButton { display: none; }
-.darkPlayer.playerShown #titleBar { color: #fffc; }
 #sidebarNav { display: block; }
 .sideGroup { opacity: .5; padding: 0 8px 0 10px; font-size: .9em; display: flex; align-items: center; margin: 20px 0 4px; }
 .sideGroup span { flex: 1; }
@@ -72,12 +70,11 @@ h3 { font-size: 1em; font-weight: 400; }
 /* The bar slides and fades with the current track. */
 #playerBar { z-index: 20; opacity: 0; transition: bottom .2s, opacity .2s; }
 .hasCurrent #playerBar { opacity: 1; }
-.hasCurrent:not(.playerShown) #playerBar { bottom: 0; }
+.hasCurrent #playerBar { bottom: 0; }
 #seekBar { position: absolute; left: 5px; top: 0; width: calc(100% - 10px); height: 6px; z-index: 2; }
 #seekBar .outerBar { border-radius: 0; }
 /* 2024 SimAP: moving stripes on both progress tracks while the audio is being opened. */
 .musicLoading :is(#seekBar, #largeSeekBar) .outerBar { animation: progressLoading 1s linear infinite; background-image: linear-gradient(-45deg, #0000000d 25%, transparent 0, transparent 50%, #0000000d 0, #0000000d 75%, transparent 0, transparent); background-repeat: repeat-x; background-size: 25px 20px; }
-.darkPlayer.musicLoading #largeSeekBar .outerBar { background-image: linear-gradient(-45deg, #ffffff0d 25%, transparent 0, transparent 50%, #ffffff0d 0, #ffffff0d 75%, transparent 0, transparent); }
 @keyframes progressLoading { to { background-position: 25px 0; } }
 #seekBar .dot { width: 11px; height: 11px; }
 #playerBar .center > button { width: 40px; height: 40px; font-size: 1.5em; opacity: .3; border-radius: 50%; transition: all .3s; }
@@ -90,65 +87,6 @@ h3 { font-size: 1em; font-weight: 400; }
 #playerBar .volBtnBottom .progress { height: 5px; }
 .playBtnColor #playerBar .center > button.play { background: var(--SimsvMainColor); color: white; font-size: 1.6em; width: 50px; height: 50px; margin: 0 5px; }
 .playBtnColor #playerBar .center > button:not(.play) { opacity: .5; }
-/* Under the open play page the bar is out of sight: it leaves without moving, and stays put while the page slides over it. */
-.playerShown #playerBar { bottom: -90px; transition: none; }
-.playerOpening #playerBar { bottom: 0; }
-#playPage { top: 0; z-index: 50; --SimsvMainColor: var(--SimAPTheme); }
-.darkPlayer #playPage { --SimAPTheme: #fffc!important; }
-.darkPlayer #playPage .progress .outerBar { background: #ffffff19; }
-.controls .buttons > button.active { color: var(--SimAPTheme); opacity: .7; }
-.largeVolumeControl > button:hover { color: var(--SimAPTheme); }
-/* 2024 SimAP .infoBar i: hover and press feedback, widening into the sleep countdown. */
-.controls .infoBar > button { flex-shrink: 0; width: 30px; height: 30px; border-radius: 15px; background: #00000006; color: #0009; font-size: 1.1em; transition: all .2s, font-size 0s; }
-.controls .infoBar > button i { background: transparent; color: inherit; }
-.controls .infoBar > button:hover { background: #0000000d; color: #000c; filter: none; }
-.controls .infoBar > button:active { background: #0000000d; color: #000c; transform: scale(.95); filter: none; }
-.sleepMode .controls .infoBar > button { width: 70px; font-size: .9em; font-variant-numeric: tabular-nums; }
-.darkPlayer .controls .infoBar > button { background: #ffffff06; color: #fff9; }
-.darkPlayer .controls .infoBar > button:hover, .darkPlayer .controls .infoBar > button:active { background: #ffffff0d; color: #fffc; }
-.controls .buttons > button, .largeVolumeControl > button { width: 50px; height: 50px; position: relative; font-size: 1.5em; transition: all .3s; opacity: .3; border-radius: 50%; }
-.controls .buttons > button:hover, .largeVolumeControl > button:hover { background: #0000000d; opacity: .7; filter: none; }
-.controls .buttons > button:active { transform: scale(.95); }
-.controls .buttons > button.larger i { font-size: 1.15em; }
-.controls .buttons > button.play { width: 60px; height: 60px; font-size: 2.1em; opacity: 1; }
-.largeVolumeControl { position: relative; }
-#largeVolumeBar { position: absolute; width: 120px; bottom: 58px; left: -35px; background: #fcfcfc; box-shadow: 0 3px 15px #0002; border-radius: 5px; }
-.controls .progressControl .progress { flex: 1; }
-#lyricsView { height: 100%; --normalColor: #0006; --activeColor: var(--SimAPTheme); --hoverColor: #0009; }
-#lyricsView .lyricLine { font-weight: 400; }
-.blurLyrics #lyricsView:not(.manualScroll) .lyricLine[data-blur="2"] { filter: blur(2px); }
-.blurLyrics #lyricsView:not(.manualScroll) .lyricLine[data-blur="3"] { filter: blur(3px); }
-.blurLyrics #lyricsView:not(.manualScroll) .lyricLine[data-blur="4"] { filter: blur(4px); }
-.blurLyrics #lyricsView:not(.manualScroll) .lyricLine[data-blur="5"] { filter: blur(5px); }
-/* A blurred line is readable while the pointer is on it. */
-.blurLyrics #lyricsView:not(.manualScroll) .lyricLine[data-blur]:hover { filter: none; }
-.darkPlayer #lyricsView { --normalColor: #fff3; --activeColor: #fffc; --hoverColor: #fff9; }
-.emptyLyrics { color: #0006; font-size: 1em!important; text-align: center; }
-.darkPlayer .emptyLyrics { color: #fff6; }
-#queueTracks { height: 100%; overflow: auto; }
-#queueTracks::before, #queueTracks::after { content: ""; display: block; height: 50%; }
-.queueRow { display: flex; align-items: center; height: 80px; padding: 0 10px; border-radius: 10px; transition: background .2s; }
-.queueRow:hover { background: #00000006; }
-.queueRow.current { background: #0000000d; }
-.queueRow img { min-width: 60px; width: 60px; height: 60px; margin-right: 10px; border-radius: 5px; object-fit: cover; }
-.queueRow > div { width: calc(100% - 100px); }
-.queueRow p { display: block; font-size: 1.1em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.queueRow small { display: block; font-size: .9em; opacity: .8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.queueRow > button { width: 30px; height: 30px; opacity: .3; font-size: 1em; }
-.queueRow > button:hover { opacity: .8; filter: none; }
-.queueRow.current > button { opacity: 0; pointer-events: none; }
-.list > #queueTracks { padding: 0; display: block; height: 100%; border-radius: 0; background: transparent; }
-.list::before, .list::after { display: none; }
-.coverAtmosphere { position: absolute; inset: 0; opacity: .2; pointer-events: none; transition: background-color .3s; }
-.coverAtmosphere::after { content: ""; position: absolute; inset: 0; background: linear-gradient(135deg, #ffffff19, #ffffff80); }
-.coverAtmosphere div { position: absolute; width: 100%; height: 120%; animation: atmosphereDrift 22s ease-in-out infinite alternate; }
-.coverAtmosphere div:nth-child(1) { left: -15%; top: -20%; }
-.coverAtmosphere div:nth-child(2) { right: -20%; bottom: -30%; animation-delay: -8s; animation-direction: alternate-reverse; }
-.coverAtmosphere div:nth-child(3) { left: 30%; top: 20%; animation-delay: -16s; }
-.staticBackdrop .coverAtmosphere div { animation: none; }
-body:not(.playing) .coverAtmosphere div, body:not(.playerShown) .coverAtmosphere div { animation-play-state: paused; }
-.darkPlayer .coverAtmosphere { opacity: .35; }
-.darkPlayer .coverAtmosphere div { opacity: .5; }
 #themeBackdrop { position: fixed; inset: 0; background-size: cover; background-position: center; opacity: .05; z-index: 40; pointer-events: none; }
 .themeBlur #themeBackdrop { filter: blur(30px); transform: scale(1.12); }
 .themeImage #rightPlaceholder img { visibility: hidden; }
@@ -197,10 +135,8 @@ body:not(.playing) .coverAtmosphere div, body:not(.playerShown) .coverAtmosphere
 .pluginInstall p { font-size: .9em; opacity: .8; margin-top: 3px; }
 #pluginCards { margin-top: 15px; }
 .dragGhost { position: fixed; z-index: 160; margin: 0; pointer-events: none; background: #fcfcfc; border-radius: 5px; box-shadow: 0 8px 24px #00000024; opacity: .96; }
-.dragGhost.queueRow { background: #f4f4f4; border-radius: 10px; }
-.darkPlayer .dragGhost.queueRow { background: #262626; color: #ffffffe6; }
 .dragSource { opacity: 0; }
-.dragSorting .trackRow, .dragSorting .queueRow, .dragSorting .pluginCard { transition: transform .15s; }
+.dragSorting .trackRow, .dragSorting .pluginCard { transition: transform .15s; }
 .dragUp { transform: translateY(calc(-1 * var(--dragStep))); }
 .dragDown { transform: translateY(var(--dragStep)); }
 .pluginDragHandle { flex-shrink: 0; letter-spacing: -3px; padding: 0 3px 0 0; font-family: inherit; }
@@ -307,14 +243,34 @@ body:not(.playing) .coverAtmosphere div, body:not(.playerShown) .coverAtmosphere
 .speedSlider { display: flex; align-items: center; gap: 14px; font-size: 13px; line-height: normal; padding-bottom: 4px; }
 .speedSlider > span { opacity: .5; font-variant-numeric: tabular-nums; }
 .speedSlider > .progress { flex: 1; }
-#playerBar .info.trackChanging, .musicInfo.trackChanging { animation: trackInfoChange .32s ease-out; }
-#largeCover.trackChanging, #lyricsView.trackChanging { animation: trackContentChange .36s ease-out; }
-#playerBar .info.trackLoading, .musicInfo.trackLoading, #largeCover.trackLoading, #lyricsView.trackLoading { animation: trackContentLeave .12s ease-out forwards; }
+#playerBar .info.trackChanging { animation: trackInfoChange .32s ease-out; }
+#playerBar .info.trackLoading { animation: trackContentLeave .12s ease-out forwards; }
 @keyframes trackInfoChange { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes trackContentChange { from { opacity: .15; } to { opacity: 1; } }
 @keyframes trackContentLeave { to { opacity: 0; } }
-/* Resting while the play page slides in; the slide itself is the transform on #playPage. */
-.playerOpening #playPage * { transition: none !important; animation-play-state: paused !important; }
-/* Coming from the main window, the cover, title and lyrics are simply there: no fade plays under the slide or after it. */
-.playerOpening #playPage :is(.trackChanging, .trackLoading) { animation: none !important; }
 .trackTable td > m { background: var(--SimsvSubColor); }
+/* A play page covers the window. One that leaves the window buttons to the host has them drawn above it on the colour it names. */
+.playerExternal #desktopButton { display: none; }
+.playerHostButtons .titleActions { background: var(--playTitleColor); }
+.playerHostButtons.playerExternalDark #titleBar { color: #fffc; }
+/* Play page picker: one row per page, its preview beside its name; the page in use is framed and ticked. */
+.modalContainer.playPagesDialog > div { width: 560px; }
+.playPageList { display: grid; gap: 8px; line-height: normal; }
+.playPageRow { display: flex; align-items: center; gap: 16px; width: 100%; padding: 10px 16px 10px 10px; border: 1px solid #0000000d; border-radius: 8px; background: white; color: inherit; text-align: left; transition: background .2s, color .2s, border-color .2s; }
+/* A row is SimUI's .clickable: its light hover and press, and its sub colour when it is the one in use. */
+.playPageRow:hover, .playPageRow:active { filter: none; }
+.playPageRow.active { border-color: var(--SimsvMainColor); }
+.playPagePreview { flex: none; width: 160px; height: 100px; display: flex; align-items: center; justify-content: center; border-radius: 5px; overflow: hidden; background: #0000000a; }
+.playPagePreview > img { width: 100%; height: 100%; object-fit: cover; }
+.playPagePreview > i { font-size: 32px; opacity: .3; }
+.playPageText { flex: 1; min-width: 0; }
+.playPageText > span { display: block; font-size: 16px; }
+.playPageText > small { display: block; font-size: 13px; opacity: .6; margin-top: 2px; }
+.playPageText > p { font-size: 13px; opacity: .6; line-height: 1.5; margin-top: 6px; }
+.playPageRow > i { flex: none; font-size: 20px; color: var(--SimsvMainColor); opacity: 0; transition: opacity .2s; }
+.playPageRow.active > i { opacity: 1; }
+.playPageList > .emptyState { position: static; padding: 30px 0; }
+/* SimUI gives inputs and buttons a 5px block margin; in a settings row the row's own padding is the spacing. */
+.settingsCard .settingControl > .input, .settingsCard .settingControl > button { margin: 0; }
+.searchTitle .inputGroup > .input, .searchTitle .inputGroup > button { height: 40px; box-sizing: border-box; margin: 0; }
+.searchTitle .inputGroup { align-items: stretch; }

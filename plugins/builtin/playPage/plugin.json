@@ -1,0 +1,10 @@
+{
+  "id": "playPage",
+  "name": "内置播放页",
+  "version": "1.0.0",
+  "author": "SimMusic",
+  "description": "内置界面：SimMusic 的播放页，并排显示封面、歌词与播放队列，界面随封面取色。",
+  "main": "main.js",
+  "permissions": ["playPage", "player"],
+  "playPages": [{ "id": "default", "name": "默认播放页", "description": "并排显示封面、歌词与播放队列，界面随封面取色。", "preview": "preview.svg", "url": "player.html", "windowButtons": true }]
+}

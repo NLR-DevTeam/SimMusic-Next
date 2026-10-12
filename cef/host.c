@@ -67,6 +67,9 @@ static void closeAllViews(void);
 static void maybeQuit(void);
 static void hostCommand(char *line);
 static int panelDragAt(LPARAM point);
+static void stepSlides(void);
+static void reportFullscreen(int enabled);
+static int openDialogPopup(const cef_string_t *name, const cef_popup_features_t *features, cef_window_info_t *info, cef_client_t **newClient, cef_browser_settings_t *settings);
 static int mainClosed;
 
 // Static callback objects have process lifetime and retain the owner reference.
@@ -273,6 +276,7 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
         printf("WV:%s\n", (char *)lParam); fflush(stdout);
         free((char *)lParam);
         return 0;
+    case WM_APP + 12: stepSlides(); return 0;
     case WM_APP + 2: showSleepWindow(); return 0;
     case WM_APP + 3: closeSleepWindow(); return 0;
     case WM_APP + 4:
@@ -316,7 +320,11 @@ static int CEF_CALLBACK beforePopup(cef_life_span_handler_t *self, cef_browser_t
     const cef_string_t *targetUrl, const cef_string_t *targetName,
     cef_window_open_disposition_t disposition, int gesture, const cef_popup_features_t *features,
     cef_window_info_t *info, cef_client_t **newClient, cef_browser_settings_t *settings,
-    cef_dictionary_value_t **extra, int *noJs) { return 1; }
+    cef_dictionary_value_t **extra, int *noJs) {
+    // The only window a page of the host may open is one of its own dialogs.
+    // Compared by identifier: is_same would take a reference of the main browser away with every call.
+    return !mainBrowser || browser->get_identifier(browser) != mainBrowser->get_identifier(mainBrowser) || !openDialogPopup(targetName, features, info, newClient, settings);
+}
 static int CEF_CALLBACK beforeBrowse(cef_request_handler_t *self, cef_browser_t *browser, cef_frame_t *frame,
     cef_request_t *request, int gesture, int redirect) {
     cef_string_userfree_t url = request->get_url(request);
@@ -367,7 +375,7 @@ static cef_drag_handler_t *CEF_CALLBACK getDrag(cef_client_t *self) { return &dr
 static cef_request_handler_t *CEF_CALLBACK getRequest(cef_client_t *self) { return &requestHandler; }
 static cef_context_menu_handler_t *CEF_CALLBACK getMenu(cef_client_t *self) { return &menuHandler; }
 static cef_display_handler_t *CEF_CALLBACK getDisplay(cef_client_t *self) { return &displayHandler; }
-static void CEF_CALLBACK fullscreenChanged(cef_display_handler_t *self, cef_browser_t *browser, int enabled) {
+static void setMainFullscreen(int enabled) {
     if (fullscreen == enabled) return;
     fullscreen = enabled;
     if (enabled) {
@@ -384,7 +392,9 @@ static void CEF_CALLBACK fullscreenChanged(cef_display_handler_t *self, cef_brow
         SetWindowPlacement(mainWindow, &normalPlacement);
         SetWindowPos(mainWindow, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
     }
+    reportFullscreen(enabled);
 }
+static void CEF_CALLBACK fullscreenChanged(cef_display_handler_t *self, cef_browser_t *browser, int enabled) { setMainFullscreen(enabled); }
 static cef_browser_process_handler_t *CEF_CALLBACK getProcess(cef_app_t *self) { return &processHandler; }
 static void CEF_CALLBACK contextInitialized(cef_browser_process_handler_t *self) {
     WNDCLASSEXW windowClass = { .cbSize = sizeof(WNDCLASSEXW), .style = CS_DBLCLKS, .lpfnWndProc = windowProc,

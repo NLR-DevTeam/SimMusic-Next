@@ -47,6 +47,10 @@ type webviewHost struct {
 	extAddr string                // port of the listener serving extension pages
 	waits   map[string]chan []string
 	serial  uint64
+	// The extension play page in use, the extension whose page failed to load, and the lock of syncPlayView.
+	play       *playView
+	playFailed *plugin.Plugin
+	syncMu     sync.Mutex
 }
 
 var hostEscaper = strings.NewReplacer("\\", "\\\\", "\t", "\\t", "\n", "\\n", "\r", "\\r")
@@ -131,7 +135,7 @@ func (u *UI) hostEvent(line string) {
 		u.hostSend("eval", id, script)
 	}
 	switch event {
-	case "start", "load", "fail", "title":
+	case "start", "load", "fail", "title", "fullscreen":
 		v.sink(event, args)
 	case "nav":
 		v.sink("navigation", args)
@@ -154,7 +158,8 @@ func flag(on bool) string {
 }
 
 func (u *UI) OpenWebview(p *plugin.Plugin, o plugin.WebviewOptions, sink func(string, []string)) (string, error) {
-	if o.Kind != "panel" && o.Kind != "window" && o.Kind != "offscreen" {
+	// "player" is the host's own: a panel over the whole window, apart from the content panel.
+	if o.Kind != "panel" && o.Kind != "window" && o.Kind != "offscreen" && o.Kind != "player" {
 		return "", errors.New("未知的 webview 类型")
 	}
 	var token [8]byte
@@ -181,14 +186,17 @@ func (u *UI) OpenWebview(p *plugin.Plugin, o plugin.WebviewOptions, sink func(st
 	if replaced != "" {
 		u.hostSend("close", replaced)
 	}
-	flags := 0
-	for bit, on := range []bool{o.Resizable, o.Frame, o.Top, o.Fullscreen, o.Show, o.SkipTaskbar, o.Minimizable, o.Maximizable, o.Positioned, o.Title != ""} {
+	flags, hostKind := 0, o.Kind
+	if o.Kind == "player" {
+		hostKind = "panel"
+	}
+	for bit, on := range []bool{o.Resizable, o.Frame, o.Top, o.Fullscreen, o.Show, o.SkipTaskbar, o.Minimizable, o.Maximizable, o.Positioned, o.Title != "", o.Kind == "player"} {
 		if on {
 			flags |= 1 << bit
 		}
 	}
 	n := strconv.Itoa
-	u.hostSend("create", id, o.Kind, o.URL, base, filepath.Join(u.app.DataDir, "cef-cache", "webview", p.ID()), o.Title, o.Icon, o.Background,
+	u.hostSend("create", id, hostKind, o.URL, base, filepath.Join(u.app.DataDir, "cef-cache", "webview", p.ID()), o.Title, o.Icon, o.Background,
 		n(o.Width), n(o.Height), n(o.MinWidth), n(o.MinHeight), n(o.MaxWidth), n(o.MaxHeight), n(o.X), n(o.Y), n(flags))
 	return id, nil
 }
@@ -296,16 +304,25 @@ func (u *UI) panelLayout(id string, value any) {
 	if id == "" || id != u.panelID() {
 		return
 	}
+	u.hostSend(layoutFields(id, value)...)
+}
+
+func layoutFields(id string, value any) []string {
 	layout, _ := value.(map[string]any)
 	number := func(v any) string { f, _ := v.(float64); return strconv.Itoa(int(f + .5)) }
 	fields := []string{"layout", id, number(layout["left"]), number(layout["top"]), number(layout["right"]), number(layout["bottom"]), flag(layout["visible"] == true)}
+	// Each cut-out is x, y, width, height and, optionally, the radius of its corners.
 	holes, _ := layout["holes"].([]any)
 	for _, hole := range holes {
-		if rect, _ := hole.([]any); len(rect) == 4 && len(fields) < 7+4*16 {
-			fields = append(fields, number(rect[0]), number(rect[1]), number(rect[2]), number(rect[3]))
+		if rect, _ := hole.([]any); (len(rect) == 4 || len(rect) == 5) && len(fields) < 7+5*16 {
+			radius := "0"
+			if len(rect) == 5 {
+				radius = number(rect[4])
+			}
+			fields = append(fields, number(rect[0]), number(rect[1]), number(rect[2]), number(rect[3]), radius)
 		}
 	}
-	u.hostSend(fields...)
+	return fields
 }
 
 func (u *UI) panelClose(id string) {
@@ -356,7 +373,7 @@ func (u *UI) DisplayWebviewURL(p *plugin.Plugin, actual string) string {
 
 // Parts of the host interface extension pages may use to look like it: /.sim/<name>.
 var extKit = map[string]string{
-	"simui.css": "simui.v5.css", "simui.js": "simui.v5.js", "cssRules.js": "cssRules.js", "runtime.css": "runtime.css", "assets/fonts/remixicon.ttf": "assets/fonts/remixicon.ttf",
+	"simui.css": "simui.v5.css", "simui.js": "simui.v5.js", "player.js": "simPlayer.js", "cssRules.js": "cssRules.js", "runtime.css": "runtime.css", "assets/fonts/remixicon.ttf": "assets/fonts/remixicon.ttf", "assets/fonts/codicon.ttf": "assets/fonts/codicon.ttf", "assets/placeholder.png": "assets/placeholder.png",
 }
 
 func (u *UI) startExtServer() error {
@@ -373,10 +390,11 @@ func (u *UI) startExtServer() error {
 	server := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		label, _, _ := strings.Cut(r.Host, ".")
 		var source fs.FS
+		var owner *plugin.Plugin
 		h.mu.Lock()
 		for _, o := range h.origins {
 			if o.label == label && r.Host == o.label+".localhost:"+port {
-				source = o.plugin.Source()
+				owner, source = o.plugin, o.plugin.Source()
 			}
 		}
 		h.mu.Unlock()
@@ -397,6 +415,15 @@ func (u *UI) startExtServer() error {
 				w.Header().Set("Content-Type", "text/css; charset=utf-8")
 				w.Header().Set("Cache-Control", "no-store")
 				fmt.Fprintf(w, "@font-face { font-family: \"icon\"; src: url(\"assets/fonts/remixicon.ttf\"); }\nhtml:root { font-family: \"%s\", \"Microsoft YaHei\", sans-serif; }\n", family)
+				return
+			}
+			if name == "cover" {
+				// The covers of the songs in the player's state, for extensions with playback control.
+				if !owner.HasPermission(plugin.PermPlayer) {
+					http.NotFound(w, r)
+					return
+				}
+				u.cover(w, r)
 				return
 			}
 			file, known := extKit[name]

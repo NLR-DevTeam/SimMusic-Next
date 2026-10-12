@@ -17,6 +17,7 @@ type Line struct {
 var tagRe = regexp.MustCompile(`\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]`)
 
 // Parse 解析 LRC 文本。multiLang 为 true 时，时间戳相同的多行合并为原文 + 翻译。
+// 行内的逐字时间标签（增强 LRC 的 <mm:ss.xx>）不属于文本；只有时间、没有内容的行不是歌词，完全忽略。
 func Parse(src string, multiLang bool) []Line {
 	type raw struct {
 		t   float64
@@ -51,7 +52,10 @@ func Parse(src string, multiLang bool) []Line {
 			}
 			times = append(times, float64(min*60+sec)+frac)
 		}
-		txt := strings.TrimSpace(ln[end:])
+		txt := plain(ln[end:])
+		if txt == "" {
+			continue
+		}
 		for _, t := range times {
 			all = append(all, raw{t, txt, seq})
 			seq++

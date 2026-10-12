@@ -588,4 +588,5 @@ func (p *Plugin) installAPI(rs *runState) {
 		}
 	})
 	p.installWebview(rs, sim)
+	p.installPlayer(sim)
 }

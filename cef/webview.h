@@ -12,7 +12,7 @@
 #include "include/capi/cef_values_capi.h"
 
 enum { viewResizable = 1, viewFrame = 2, viewTop = 4, viewFullscreen = 8, viewShow = 16, viewSkipTaskbar = 32,
-    viewMinimizable = 64, viewMaximizable = 128, viewPositioned = 256, viewTitleFixed = 512 };
+    viewMinimizable = 64, viewMaximizable = 128, viewPositioned = 256, viewTitleFixed = 512, viewCover = 1024, viewModal = 2048 };
 enum { kindPanel, kindWindow, kindOffscreen };
 
 typedef struct Webview {
@@ -29,9 +29,12 @@ typedef struct Webview {
     int fullscreen;
     WINDOWPLACEMENT placement;
     LONG_PTR style;
-    int insets[4], shown, holeCount, holes[16][4];
+    int insets[4], shown, holeCount, holes[16][5];
+    int offset, slideFrom, slideTo, sliding;   // a covering panel slides in from below and out again
+    LARGE_INTEGER slideStart;
     HICON icon;
     int reported;           // the Go core has been told this view is closed
+    int modalHeld;          // a dialog that has the main window disabled
 } Webview;
 
 static __typeof__(&cef_browser_host_create_browser_sync) createBrowserSync;
@@ -41,6 +44,7 @@ static __typeof__(&cef_process_message_create) createProcessMessage;
 static __typeof__(&cef_v8value_create_function) createV8Function;
 static __typeof__(&cef_v8context_get_current_context) currentV8Context;
 static Webview *webviews, *creatingView;
+static void releaseModal(Webview *view);
 static cef_client_t viewClient;
 static cef_life_span_handler_t viewLife;
 static cef_load_handler_t viewLoad;
@@ -176,6 +180,15 @@ static void setViewFullscreen(Webview *view, int enabled) {
 // edge down to the player bar, right of the sidebar. The window buttons of the host page stay above it. Rectangles of
 // host elements shown above it are cut out of its region. A hidden panel leaves the top of the
 // z-order, so that the host page stays the main window's first child.
+// The timing of a CSS "ease" transition: cubic-bezier(.25, .1, .25, 1).
+static double easeCss(double t) {
+    double low = 0, high = 1, s = t;
+    for (int i = 0; i < 24; i++) {
+        s = (low + high) / 2;
+        if (3 * (1 - s) * (1 - s) * s * .25 + 3 * (1 - s) * s * s * .25 + s * s * s < t) low = s; else high = s;
+    }
+    return 3 * (1 - s) * (1 - s) * s * .1 + 3 * (1 - s) * s * s + s * s * s;
+}
 static void layoutPanel(Webview *view) {
     if (view->kind != kindPanel || !view->window) return;
     RECT client;
@@ -183,7 +196,18 @@ static void layoutPanel(Webview *view) {
     UINT dpi = GetDpiForWindow(mainWindow);
     int left = MulDiv(view->insets[0], dpi, 96), top = MulDiv(view->insets[1], dpi, 96);
     int width = client.right - left - MulDiv(view->insets[2], dpi, 96), height = client.bottom - top - MulDiv(view->insets[3], dpi, 96);
-    if (!view->shown || width <= 0 || height <= 0) {
+    if (view->flags & viewCover) {
+        left = 0; top = 0; width = client.right; height = client.bottom;
+        // A covering panel that is not shown is not hidden but parked below the window, clipped away by it:
+        // the page is laid out at its real size and keeps a rendered frame, so it is there the moment it slides in.
+        if (!view->shown && !view->sliding && width > 0 && height > 0) {
+            view->offset = height * 6 / 5;
+            SetWindowRgn(view->window, NULL, FALSE);
+            SetWindowPos(view->window, HWND_BOTTOM, 0, view->offset, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            return;
+        }
+    }
+    if (!(view->shown || view->sliding) || width <= 0 || height <= 0) {
         SetWindowPos(view->window, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW);
         return;
     }
@@ -192,13 +216,52 @@ static void layoutPanel(Webview *view) {
         region = CreateRectRgn(0, 0, width, height);
         for (int i = 0; i < view->holeCount; i++) {
             int *h = view->holes[i];
-            HRGN hole = CreateRectRgn(MulDiv(h[0], dpi, 96) - left, MulDiv(h[1], dpi, 96) - top, MulDiv(h[0] + h[2], dpi, 96) - left, MulDiv(h[1] + h[3], dpi, 96) - top);
+            int l = MulDiv(h[0], dpi, 96) - left, t = MulDiv(h[1], dpi, 96) - top - view->offset, r = MulDiv(h[0] + h[2], dpi, 96) - left, b = MulDiv(h[1] + h[3], dpi, 96) - top - view->offset;
+            int corner = 2 * MulDiv(h[4], dpi, 96);
+            HRGN hole = corner ? CreateRoundRectRgn(l, t, r + 1, b + 1, corner, corner) : CreateRectRgn(l, t, r, b);
             CombineRgn(region, region, hole, RGN_DIFF);
             DeleteObject(hole);
         }
     }
     SetWindowRgn(view->window, region, TRUE);
-    SetWindowPos(view->window, HWND_TOP, left, top, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    SetWindowPos(view->window, HWND_TOP, left, top + view->offset, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+}
+// The play page is told whether the main window is fullscreen, however it came to be.
+static void reportFullscreen(int enabled) {
+    for (Webview *view = webviews; view; view = view->next)
+        if (view->kind == kindPanel && (view->flags & viewCover)) { emitBegin("fullscreen", view->id); emitNumber(enabled); emitEnd(); }
+}
+static volatile LONG slideTicking;
+static DWORD WINAPI slideTicks(void *unused) {
+    while (slideTicking && !shuttingDown) { DwmFlush(); PostMessageW(mainWindow, WM_APP + 12, 0, 0); }
+    return 0;
+}
+// A covering panel (the play page) moves like the page it replaces: .3s from below the window, and back.
+static void slidePanel(Webview *view, int wasShown) {
+    RECT client;
+    GetClientRect(mainWindow, &client);
+    int travel = client.bottom * 6 / 5;
+    if (!view->sliding && !wasShown) view->offset = travel;
+    SetWindowPos(view->window, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    view->slideFrom = view->offset;
+    view->slideTo = view->shown ? 0 : travel;
+    view->sliding = 1;
+    QueryPerformanceCounter(&view->slideStart);
+    if (!InterlockedExchange(&slideTicking, 1)) CloseHandle(CreateThread(NULL, 0, slideTicks, NULL, 0, NULL));
+}
+// One step for every frame the desktop composes, from the thread below.
+static void stepSlides(void) {
+    LARGE_INTEGER now, frequency;
+    QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
+    int sliding = 0;
+    for (Webview *view = webviews; view; view = view->next) {
+        if (!view->sliding) continue;
+        double t = (double)(now.QuadPart - view->slideStart.QuadPart) / frequency.QuadPart / .3;
+        if (t >= 1) { view->offset = view->slideTo; view->sliding = 0; }
+        else { view->offset = view->slideFrom + (int)((view->slideTo - view->slideFrom) * easeCss(t)); sliding = 1; }
+        layoutPanel(view);
+    }
+    if (!sliding) InterlockedExchange(&slideTicking, 0);
 }
 static void layoutPanels(void) {
     for (Webview *view = webviews; view; view = view->next) layoutPanel(view);
@@ -286,9 +349,11 @@ static LRESULT CALLBACK viewProc(HWND window, UINT message, WPARAM wParam, LPARA
         return 0;
     case WM_CLOSE:
         // Destroying the container destroys the browser's window, which closes the browser.
+        releaseModal(view);
         DestroyWindow(window);
         return 0;
     case WM_NCDESTROY:
+        releaseModal(view);
         // With its window gone the view is closed as far as the extension is concerned, whenever
         // the browser itself finishes closing.
         if (!view->reported) { view->reported = 1; emitBegin("closed", view->id); emitEnd(); }
@@ -298,7 +363,23 @@ static LRESULT CALLBACK viewProc(HWND window, UINT message, WPARAM wParam, LPARA
     }
     return DefWindowProcW(window, message, wParam, lParam);
 }
+// A dialog of the host page is a window of its own, modal to the main window: that window is disabled
+// while a dialog is shown, and enabled again before the last one goes, so that it is the one to come forward.
+static int modalCount;
+static void releaseModal(Webview *view) {
+    if (!view->modalHeld) return;
+    view->modalHeld = 0;
+    if (--modalCount > 0 || shuttingDown) return;
+    EnableWindow(mainWindow, TRUE);
+    SetForegroundWindow(mainWindow);
+}
+static void centerOnMain(Webview *view) {
+    RECT main, own;
+    GetWindowRect(mainWindow, &main); GetWindowRect(view->window, &own);
+    SetWindowPos(view->window, NULL, main.left + (main.right - main.left - (own.right - own.left)) / 2, main.top + (main.bottom - main.top - (own.bottom - own.top)) / 2, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
 static void closeView(Webview *view) {
+    releaseModal(view);
     if (view->window) { DestroyWindow(view->window); return; }
     if (!view->browser) return;
     cef_browser_host_t *host = view->browser->get_host(view->browser);
@@ -320,8 +401,19 @@ static void closeAllViews(void) {
 
 // ---------- browser callbacks ----------
 
+static Webview *pendingDialog;
 static void CEF_CALLBACK viewAfterCreated(cef_life_span_handler_t *self, cef_browser_t *browser) {
     if (creatingView) creatingView->browserId = browser->get_identifier(browser);
+    else if (pendingDialog && browser->is_popup(browser)) {
+        // The browser of a dialog the host page opened: it fills the window made for it.
+        Webview *view = pendingDialog;
+        pendingDialog = NULL;
+        browser->base.add_ref(&browser->base);
+        view->browser = browser;
+        view->browserId = browser->get_identifier(browser);
+        resizeView(view);
+        EnumChildWindows(view->window, subclassViewChild, 0);
+    }
     releaseCef(browser);
 }
 // A page cannot open windows: whatever asks for a new one replaces the current page.
@@ -399,7 +491,9 @@ static void CEF_CALLBACK viewTitleChange(cef_display_handler_t *self, cef_browse
 }
 static void CEF_CALLBACK viewFullscreenChange(cef_display_handler_t *self, cef_browser_t *browser, int enabled) {
     Webview *view = viewOf(browser);
-    if (view && view->window) setViewFullscreen(view, enabled);
+    // A panel that covers the whole main window (the play page) takes that window fullscreen with it.
+    if (view && view->kind == kindPanel && (view->flags & viewCover)) setMainFullscreen(enabled);
+    else if (view && view->window) setViewFullscreen(view, enabled);
     releaseCef(browser);
 }
 // ext://page.html is the extension's own file, wherever a link to it appears.
@@ -439,15 +533,25 @@ static void CEF_CALLBACK viewDragChanged(cef_drag_handler_t *self, cef_browser_t
         if (view->dragRegion) DeleteObject(view->dragRegion);
         view->dragRegion = CreateRectRgn(0, 0, 0, 0);
         UINT dpi = GetDpiForWindow(view->window);
-        for (size_t i = 0; i < count; i++) {
+        // The regions come in document order. What a page marks as not draggable stays so wherever it stands
+        // in the document, a button placed over a draggable header included: those are taken out last.
+        for (int pass = 1; pass >= 0; pass--) for (size_t i = 0; i < count; i++) {
+            if (regions[i].draggable != pass) continue;
             cef_rect_t r = regions[i].bounds;
             HRGN region = CreateRectRgn(MulDiv(r.x, dpi, 96), MulDiv(r.y, dpi, 96), MulDiv(r.x + r.width, dpi, 96), MulDiv(r.y + r.height, dpi, 96));
-            CombineRgn(view->dragRegion, view->dragRegion, region, regions[i].draggable ? RGN_OR : RGN_DIFF);
+            CombineRgn(view->dragRegion, view->dragRegion, region, pass ? RGN_OR : RGN_DIFF);
             DeleteObject(region);
         }
         EnumChildWindows(view->window, subclassViewChild, 0);
     }
     releaseCef(frame); releaseCef(browser);
+}
+// Files dropped on the play page would replace it with the file: the drag is refused there.
+static int CEF_CALLBACK viewDragEnter(cef_drag_handler_t *self, cef_browser_t *browser, cef_drag_data_t *data, cef_drag_operations_mask_t mask) {
+    Webview *view = viewOf(browser);
+    int refuse = view && (view->flags & viewCover);
+    releaseCef(data); releaseCef(browser);
+    return refuse;
 }
 // Keep the editing commands; a webview has no history buttons, printing or source view.
 static void CEF_CALLBACK viewBeforeMenu(cef_context_menu_handler_t *self, cef_browser_t *browser, cef_frame_t *frame,
@@ -617,6 +721,53 @@ static HICON loadViewIcon(const wchar_t *path, int size) {
     CloseHandle(file);
     return icon;
 }
+static void registerViewClass(void) {
+    static int registered;
+    if (registered) return;
+    HINSTANCE instance = GetModuleHandleW(NULL);
+    WNDCLASSEXW cls = { .cbSize = sizeof(cls), .style = CS_DBLCLKS, .lpfnWndProc = viewProc, .hInstance = instance,
+        .hCursor = LoadCursorW(NULL, IDC_ARROW), .hbrBackground = GetStockObject(WHITE_BRUSH), .lpszClassName = L"SimMusicWebview" };
+    cls.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1));
+    cls.hIconSm = LoadImageW(instance, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
+    RegisterClassExW(&cls);
+    registered = 1;
+}
+// window.open of the host page with a name beginning "simDialog" makes a dialog: a frameless window owned by
+// the main window, with the page's own browser inside. The host page fills it with the dialog it built; being
+// opened by that page, it stays in the same renderer, so the dialog's elements and handlers simply move over.
+// The window stays hidden until the Go core shows it; it is sized, shown and closed like any webview window.
+static int openDialogPopup(const cef_string_t *name, const cef_popup_features_t *features, cef_window_info_t *info, cef_client_t **newClient, cef_browser_settings_t *settings) {
+    if (!name || name->length < 10 || name->length > 30 || wcsncmp((wchar_t *)name->str, L"simDialog", 9) || shuttingDown) return 0;
+    if (pendingDialog) { Webview *stale = pendingDialog; pendingDialog = NULL; if (stale->window) DestroyWindow(stale->window); }
+    Webview *view = calloc(1, sizeof(Webview));
+    WideCharToMultiByte(CP_UTF8, 0, (wchar_t *)name->str, (int)name->length, view->id, sizeof(view->id) - 1, NULL, NULL);
+    view->kind = kindWindow;
+    view->flags = viewModal;
+    view->base = wide("");
+    registerViewClass();
+    UINT dpi = GetDpiForWindow(mainWindow);
+    int width = MulDiv(features && features->widthSet && features->width > 0 ? features->width : 500, dpi, 96);
+    int height = MulDiv(features && features->heightSet && features->height > 0 ? features->height : 300, dpi, 96);
+    view->window = CreateWindowExW(0, L"SimMusicWebview", L"SimMusic", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN, 0, 0, width, height, mainWindow, NULL, GetModuleHandleW(NULL), NULL);
+    if (!view->window) { free(view->base); free(view); return 0; }
+    SetWindowLongPtrW(view->window, GWLP_USERDATA, (LONG_PTR)view);
+    SetWindowPos(view->window, NULL, 0, 0, width, height, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    applyViewFrame(view);
+    centerOnMain(view);
+    RECT client;
+    GetClientRect(view->window, &client);
+    info->style = WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+    info->ex_style = 0;
+    info->parent_window = view->window;
+    info->bounds.x = info->bounds.y = 0;
+    info->bounds.width = client.right; info->bounds.height = client.bottom;
+    settings->background_color = 0xfff9f9fb;
+    *newClient = &viewClient;
+    view->next = webviews;
+    webviews = view;
+    pendingDialog = view;
+    return 1;
+}
 static void createView(char **f, int count) {
     // id kind url base partition title icon background width height minWidth minHeight maxWidth maxHeight x y flags
     if (count < 17 || findView(f[0]) || shuttingDown) return;
@@ -628,15 +779,7 @@ static void createView(char **f, int count) {
     view->minWidth = atoi(f[10]); view->minHeight = atoi(f[11]); view->maxWidth = atoi(f[12]); view->maxHeight = atoi(f[13]);
     view->flags = atoi(f[16]);
     HINSTANCE instance = GetModuleHandleW(NULL);
-    static int registered;
-    if (!registered) {
-        WNDCLASSEXW cls = { .cbSize = sizeof(cls), .style = CS_DBLCLKS, .lpfnWndProc = viewProc, .hInstance = instance,
-            .hCursor = LoadCursorW(NULL, IDC_ARROW), .hbrBackground = GetStockObject(WHITE_BRUSH), .lpszClassName = L"SimMusicWebview" };
-        cls.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1));
-        cls.hIconSm = LoadImageW(instance, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
-        RegisterClassExW(&cls);
-        registered = 1;
-    }
+    registerViewClass();
     UINT dpi = GetDpiForWindow(mainWindow);
     wchar_t *title = wide(f[5][0] ? f[5] : "SimMusic");
     cef_window_info_t info = {0};
@@ -706,6 +849,7 @@ static void createView(char **f, int count) {
     }
     view->browserId = view->browser->get_identifier(view->browser);
     if (view->window) EnumChildWindows(view->window, subclassViewChild, 0);
+    if (view->kind == kindPanel && (view->flags & viewCover)) layoutPanel(view);
     if (view->kind == kindWindow) {
         if (view->flags & viewFullscreen) setViewFullscreen(view, 1);
         if (view->flags & viewShow) { ShowWindow(view->window, SW_SHOW); SetForegroundWindow(view->window); }
@@ -719,7 +863,10 @@ static void windowCommand(Webview *view, const char *action, const char *a, cons
     HWND window = view->window;
     if (view->kind != kindWindow || !window) return;
     UINT dpi = GetDpiForWindow(window);
-    if (!strcmp(action, "show")) { ShowWindow(window, IsIconic(window) ? SW_RESTORE : SW_SHOW); SetForegroundWindow(window); }
+    if (!strcmp(action, "show")) {
+        if ((view->flags & viewModal) && !view->modalHeld) { view->modalHeld = 1; modalCount++; EnableWindow(mainWindow, FALSE); }
+        ShowWindow(window, IsIconic(window) ? SW_RESTORE : SW_SHOW); SetForegroundWindow(window);
+    }
     else if (!strcmp(action, "hide")) ShowWindow(window, SW_HIDE);
     else if (!strcmp(action, "focus")) { if (IsIconic(window)) ShowWindow(window, SW_RESTORE); SetForegroundWindow(window); }
     else if (!strcmp(action, "minimize")) ShowWindow(window, SW_MINIMIZE);
@@ -732,6 +879,8 @@ static void windowCommand(Webview *view, const char *action, const char *a, cons
         RECT rect = { 0, 0, MulDiv(atoi(a), dpi, 96), MulDiv(atoi(b), dpi, 96) };
         if (view->flags & viewFrame) AdjustWindowRectExForDpi(&rect, (DWORD)GetWindowLongPtrW(window, GWL_STYLE), FALSE, (DWORD)GetWindowLongPtrW(window, GWL_EXSTYLE), dpi);
         SetWindowPos(window, NULL, 0, 0, rect.right - rect.left, rect.bottom - rect.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        // A dialog that has not been shown yet takes its place over the main window at its final size.
+        if ((view->flags & viewModal) && !IsWindowVisible(window)) centerOnMain(view);
     }
     else if (!strcmp(action, "position")) SetWindowPos(window, NULL, MulDiv(atoi(a), dpi, 96), MulDiv(atoi(b), dpi, 96), 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     else if (!strcmp(action, "center")) {
@@ -778,12 +927,24 @@ static void hostCommand(char *line) {
     }
     else if (!strcmp(command, "layout") && count >= 7) {
         for (int i = 0; i < 4; i++) view->insets[i] = atoi(f[2 + i]);
+        int wasShown = view->shown;
         view->shown = f[6][0] == '1';
         view->holeCount = 0;
-        for (int i = 7; i + 3 < count && view->holeCount < 16; i += 4, view->holeCount++)
-            for (int j = 0; j < 4; j++) view->holes[view->holeCount][j] = atoi(f[i + j]);
+        // x y width height and the corner radius of each cut-out
+        for (int i = 7; i + 4 < count && view->holeCount < 16; i += 5, view->holeCount++)
+            for (int j = 0; j < 5; j++) view->holes[view->holeCount][j] = atoi(f[i + j]);
+        if ((view->flags & viewCover) && wasShown != view->shown) {
+            slidePanel(view, wasShown);
+            // The keyboard goes back to the host page with the play page.
+            if (!view->shown && mainBrowser && IsChild(view->window, GetFocus())) {
+                cef_browser_host_t *host = mainBrowser->get_host(mainBrowser);
+                host->set_focus(host, 1);
+                releaseCef(host);
+            }
+        }
         layoutPanel(view);
     }
+    else if (!strcmp(command, "fullscreen") && count >= 3) { if (view->kind == kindPanel && (view->flags & viewCover)) setMainFullscreen(f[2][0] == '1'); }
     else if (!strcmp(command, "win") && count >= 5) windowCommand(view, f[2], f[3], f[4]);
 }
 // Commands arrive on standard input and are handed to the window's thread one line at a time.
@@ -903,7 +1064,7 @@ static void initWebviews(void) {
     viewDisplay.on_address_change = viewAddressChange; viewDisplay.on_title_change = viewTitleChange;
     viewDisplay.on_fullscreen_mode_change = viewFullscreenChange;
     viewRequest.on_before_browse = viewBeforeBrowse; viewRequest.on_open_urlfrom_tab = viewOpenFromTab;
-    viewDrag.on_draggable_regions_changed = viewDragChanged;
+    viewDrag.on_draggable_regions_changed = viewDragChanged; viewDrag.on_drag_enter = viewDragEnter;
     viewMenu.on_before_context_menu = viewBeforeMenu;
     viewRender.get_view_rect = viewRect; viewRender.on_paint = viewPaint;
     rendererHandler.on_browser_created = rendererBrowserCreated; rendererHandler.on_browser_destroyed = rendererBrowserDestroyed;

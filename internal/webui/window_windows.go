@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"image/color"
 	"log"
 	"os"
 	"os/exec"
@@ -18,13 +17,10 @@ import (
 
 	"golang.org/x/sys/windows"
 	"simmusic/internal/core"
-	"simmusic/internal/desklyric"
 	"simmusic/internal/winx"
 )
 
-// Assets used by the independent native desktop-lyrics overlay and tray.
-var RemixTTF, _ = files.ReadFile("web/assets/fonts/remixicon.ttf")
-var IconPNG, _ = files.ReadFile("web/assets/icon.png")
+// The tray icon, in the format the system's tray takes.
 var TrayICO, _ = files.ReadFile("web/assets/tray.ico")
 
 // TextFont is the file of the interface font the user chose (Microsoft YaHei when none), for the
@@ -35,18 +31,6 @@ func TextFont(a *core.App) []byte {
 		data, _ = winx.FontData(winx.DefaultFont)
 	}
 	return data
-}
-
-func DesktopOptions(a *core.App) desklyric.Options {
-	c := a.Cfg
-	return desklyric.Options{Color: parseColor(c.String("dl.color")), Stroke: c.Bool("dl.border"), StrokeColor: parseColor(c.String("dl.borderColor")), Size: c.Float("dl.size"), Width: c.Float("dl.width"), Center: c.Bool("dl.center"), ShowTrans: c.Bool("dl.showTrans") && c.Bool("lrc.multiLang"), TransScale: c.Float("lrc.transSize"), HideCapture: c.Bool("dl.hideCapture"), Compact: c.Bool("dl.compact")}
-}
-func parseColor(s string) color.NRGBA {
-	v, err := strconv.ParseUint(strings.TrimPrefix(s, "#"), 16, 32)
-	if err != nil {
-		v = 0x1e9fff
-	}
-	return color.NRGBA{R: uint8(v >> 16), G: uint8(v >> 8), B: uint8(v), A: 255}
 }
 
 func (u *UI) Run() (runErr error) {
@@ -162,33 +146,6 @@ func (u *UI) Run() (runErr error) {
 	}
 }
 
-func (u *UI) syncSleepWindow() {
-	tick := time.NewTicker(100 * time.Millisecond)
-	defer tick.Stop()
-	shown := false
-	for {
-		select {
-		case <-u.quit:
-			return
-		case <-tick.C:
-		}
-		h := uintptr(u.hwnd.Load())
-		if h == 0 {
-			continue
-		}
-		pending := u.app.Sleep().Pending != ""
-		if pending == shown {
-			continue
-		}
-		shown = pending
-		message := uintptr(0x8003)
-		if pending {
-			message = 0x8002
-		}
-		windows.NewLazySystemDLL("user32.dll").NewProc("PostMessageW").Call(h, message, 0, 0)
-	}
-}
-
 func (u *UI) window(action string) {
 	h := uintptr(u.hwnd.Load())
 	if h == 0 {
@@ -219,6 +176,10 @@ func (u *UI) window(action string) {
 		} else {
 			u.ShowWindow(false)
 		}
+	case "sleepShow":
+		dll.NewProc("PostMessageW").Call(h, 0x8002, 0, 0)
+	case "sleepHide":
+		dll.NewProc("PostMessageW").Call(h, 0x8003, 0, 0)
 	case "destroy":
 		dll.NewProc("PostMessageW").Call(h, 0x8001, 0, 0)
 	case "quit":
@@ -243,50 +204,14 @@ func (u *UI) keepFocus() {
 	}
 }
 
+func (u *UI) ShowWindow(show bool) { winx.ShowWindowAsync(uintptr(u.hwnd.Load()), show) }
+
+// mainUncovered reports whether the main window is the one in front with nothing but the desktop lyrics over it.
+func (u *UI) mainUncovered() bool {
+	return winx.IsForegroundUncovered(uintptr(u.hwnd.Load()), u.desk.Handle())
+}
+
 func (u *UI) maximized() bool {
 	value, _, _ := windows.NewLazySystemDLL("user32.dll").NewProc("IsZoomed").Call(uintptr(u.hwnd.Load()))
 	return value != 0
-}
-
-func (u *UI) syncDesk() {
-	tick := time.NewTicker(100 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		select {
-		case <-u.quit:
-			return
-		case <-tick.C:
-		}
-		if u.desk == nil {
-			continue
-		}
-		h := uintptr(u.hwnd.Load())
-		s := u.app.Snapshot()
-		want := u.app.State.Bool("desk.visible")
-		if u.app.Sleep().Pending != "" {
-			want = false
-		}
-		if u.app.Cfg.Bool("dl.compact") && !s.Playing {
-			want = false
-		}
-		if want && u.playOpen.Load() && u.app.Cfg.Bool("dl.autoClose") && winx.IsForegroundUncovered(h, u.desk.Handle()) {
-			want = false
-		}
-		u.desk.Show(want)
-		if !want {
-			continue
-		}
-		u.desk.SetPlayback(s.Playing, s.Mode)
-		main, sub := "", ""
-		if s.Current != nil {
-			main = s.Current.Title
-		}
-		for _, line := range s.Lyrics {
-			if line.Time > s.Pos {
-				break
-			}
-			main, sub = line.Text, line.Trans
-		}
-		u.desk.SetText(main, sub)
-	}
 }

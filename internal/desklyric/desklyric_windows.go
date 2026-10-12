@@ -5,11 +5,15 @@
 package desklyric
 
 import (
+	"fmt"
 	"image"
 	"image/color"
+	"image/png"
 	"math"
+	"os"
 	"runtime"
 	"sync"
+	"time"
 	"unsafe"
 
 	"golang.org/x/image/font"
@@ -70,10 +74,18 @@ const (
 	wmApp            = 0x8000
 	wmRender         = wmApp + 1
 	wmApplyOpts      = wmApp + 2
+	wmAnimate        = wmApp + 3
 	htCaption        = 2
 	htClient         = 1
 	htTransparent    = ^uintptr(0)
 )
+
+var pSetCursor = user32.NewProc("SetCursor")
+
+func arrowCursor() uintptr {
+	cursor, _, _ := user32.NewProc("LoadCursorW").Call(0, 32512) // IDC_ARROW
+	return cursor
+}
 
 type wndClassEx struct {
 	Size       uint32
@@ -103,20 +115,6 @@ type rect struct{ Left, Top, Right, Bottom int32 }
 type point struct{ X, Y int32 }
 type size struct{ CX, CY int32 }
 
-// Options 控制桌面歌词外观（尺寸单位为 DIP，与旧版 CSS 像素一致）。
-type Options struct {
-	Color       color.NRGBA
-	Stroke      bool
-	StrokeColor color.NRGBA
-	Size        float64 // 字号
-	Width       float64 // 歌词区域宽度
-	Center      bool
-	ShowTrans   bool
-	TransScale  float64 // 翻译字号（相对主歌词）
-	HideCapture bool
-	Compact     bool
-}
-
 type Window struct {
 	mu             sync.Mutex
 	hwnd           uintptr
@@ -135,6 +133,16 @@ type Window struct {
 	w, h           int32
 	posSet         bool
 	ready          chan struct{}
+
+	// The words of the line shown, when it is sung word by word: what is sung is drawn in full, the rest
+	// at half opacity. The position was reported at posAt and moves on at rate seconds per second.
+	words     []Word
+	pos, rate float64
+	posAt     time.Time
+	animating bool
+	layer     *image.RGBA // the line as drawn in full, kept while it stays the same
+	layerKey  string
+	dump      string
 
 	textFont *opentype.Font
 	nextFont *opentype.Font // chosen by SetTextFont, adopted by the window's own thread
@@ -226,7 +234,7 @@ func (w *Window) thread() {
 	runtime.LockOSThread()
 	inst, _, _ := pGetModuleHandle.Call(0)
 	cls, _ := windows.UTF16PtrFromString("SimMusicNextDesktopLyrics")
-	wc := wndClassEx{WndProc: windows.NewCallback(wndProc), Instance: windows.Handle(inst), ClassName: cls}
+	wc := wndClassEx{WndProc: windows.NewCallback(wndProc), Instance: windows.Handle(inst), ClassName: cls, Cursor: windows.Handle(arrowCursor())}
 	wc.Size = uint32(unsafe.Sizeof(wc))
 	pRegisterClassEx.Call(uintptr(unsafe.Pointer(&wc)))
 	const exStyle = 0x00080000 | 0x00000008 | 0x00000080 | 0x08000000 | 0x20                 // LAYERED | TOPMOST | TOOLWINDOW | NOACTIVATE | TRANSPARENT
@@ -258,6 +266,11 @@ func wndProc(hwnd, umsg, wparam, lparam uintptr) uintptr {
 		return r
 	}
 	switch umsg {
+	case 0x0020: // WM_SETCURSOR
+		// The window has no pointer of its own, so whatever was shown last stayed over it, a busy pointer at
+		// times. Over the lyrics the pointer is always the arrow.
+		pSetCursor.Call(arrowCursor())
+		return 1
 	case wmNCHitTest:
 		var r rect
 		pGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
@@ -365,7 +378,14 @@ func wndProc(hwnd, umsg, wparam, lparam uintptr) uintptr {
 			go cb(int(r.Left), int(r.Top))
 		}
 		return 0
+	case wmAnimate:
+		w.render()
+		return 0
 	case wmTimer:
+		if wparam == 3 {
+			w.render()
+			return 0
+		}
 		if wparam == 2 {
 			w.guardTopmost(hwnd)
 			return 0
@@ -394,7 +414,7 @@ func wndProc(hwnd, umsg, wparam, lparam uintptr) uintptr {
 	return r
 }
 
-var controlNames = []string{"mode", "previous", "toggle", "next", "close"}
+var controlNames = ControlNames
 
 func dragBounds(width int, scale float64) image.Rectangle {
 	return image.Rect(width/2-int(18*scale), 0, width/2+int(18*scale), int(20*scale))
@@ -542,6 +562,38 @@ func (w *Window) SetText(main, sub string) {
 	}
 }
 
+// SetLine sets the line shown and its translation, with the words of the line when it is sung word by word
+// (nil otherwise), the position in the song now and how fast it advances: the speed while playing, zero otherwise.
+func (w *Window) SetLine(main, sub string, words []Word, position, rate float64) {
+	w.mu.Lock()
+	same := len(words) == len(w.words) && rate == w.rate && main == w.main && sub == w.sub
+	w.main, w.sub = main, sub
+	for i := 0; same && i < len(words); i++ {
+		same = words[i] == w.words[i]
+	}
+	// Between reports the position is carried on from the last one; a report only replaces it when
+	// the two differ by more than the reporting itself would explain (a seek).
+	if !same || rate == 0 || math.Abs(w.pos+time.Since(w.posAt).Seconds()*w.rate-position) > .12 {
+		w.pos, w.posAt = position, time.Now()
+	}
+	w.words, w.rate = append([]Word(nil), words...), rate
+	hwnd, visible := w.hwnd, w.visible
+	w.mu.Unlock()
+	if !same && visible {
+		pPostMessage.Call(hwnd, wmAnimate, 0, 0)
+	}
+}
+
+// Dump writes the next picture the window draws to a PNG file, laid over dark grey: for looking at what
+// is drawn without capturing the screen.
+func (w *Window) Dump(path string) {
+	w.mu.Lock()
+	w.dump = path
+	hwnd := w.hwnd
+	w.mu.Unlock()
+	pPostMessage.Call(hwnd, wmRender, 0, 0)
+}
+
 func (w *Window) SetPlayback(playing bool, mode int) {
 	w.mu.Lock()
 	changed := w.playing != playing || w.mode != mode
@@ -585,8 +637,20 @@ func (w *Window) Visible() bool {
 
 // render 在窗口线程中绘制并提交分层窗口内容。
 func (w *Window) render() {
+	// The line is redrawn about once a frame while it is being sung word by word, and only then.
+	w.mu.Lock()
+	animate := w.visible && len(w.words) > 0 && w.rate != 0
+	change := animate != w.animating
+	w.animating = animate
+	w.mu.Unlock()
+	if change && animate {
+		pSetTimer.Call(w.hwnd, 3, 15, 0)
+	} else if change {
+		user32.NewProc("KillTimer").Call(w.hwnd, 3)
+	}
 	w.mu.Lock()
 	opts, main, sub, hover, dragging := w.opts, w.main, w.sub, w.hover, w.dragging
+	words, position := w.words, w.pos+time.Since(w.posAt).Seconds()*w.rate
 	playing, mode, hoverControl, pressedControl := w.playing, w.mode, w.hoverControl, w.pressedControl
 	W, H, X, Y := w.w, w.h, w.x, w.y
 	hwnd := w.hwnd
@@ -618,7 +682,10 @@ func (w *Window) render() {
 	col := color.RGBA{opts.Color.R, opts.Color.G, opts.Color.B, 255}
 	stroke := color.RGBA{opts.StrokeColor.R, opts.StrokeColor.G, opts.StrokeColor.B, 255}
 	y := 20*s + fs*1.05
+	target := img
+	sungTo := -1 // the column up to which the main line has been sung; -1 when it is not sung word by word
 	drawLine := func(txt string, face font.Face, lineH float64) {
+		img := target
 		dr := &font.Drawer{Face: face}
 		adv := dr.MeasureString(txt).Round()
 		x := (int(W) - adv) / 2
@@ -626,6 +693,28 @@ func (w *Window) render() {
 			txt = ellipsis(face, txt, int(W)-int(10*s))
 			adv = (&font.Drawer{Face: face}).MeasureString(txt).Round()
 			x = (int(W) - adv) / 2
+		}
+		if sungTo == -2 {
+			// Where the singing has got to: the words before it in full, and its share of the one being sung.
+			before, reached := "", 0.0
+			for _, word := range words {
+				width := float64(dr.MeasureString(before+word.Text).Round() - dr.MeasureString(before).Round())
+				if position >= word.End {
+					reached = float64(dr.MeasureString(before + word.Text).Round())
+				} else if position > word.Start {
+					reached = float64(dr.MeasureString(before).Round()) + width*(position-word.Start)/math.Max(.001, word.End-word.Start)
+				}
+				before += word.Text
+			}
+			sungTo = x + int(math.Round(math.Min(reached, float64(adv))))
+			if len(words) > 0 && position >= words[len(words)-1].End {
+				sungTo = int(W)
+			}
+		}
+		if img.Bounds().Empty() {
+			// Only the place was wanted: the line itself is kept from an earlier frame.
+			y += lineH
+			return
 		}
 		if opts.Stroke {
 			rad := math.Max(1, s)
@@ -639,7 +728,44 @@ func (w *Window) render() {
 		drawString(img, face, float64(x)+0.6*s, y, txt, col)
 		y += lineH
 	}
-	drawLine(main, textFace, fs*1.3)
+	if len(words) > 0 {
+		// The line is drawn once, in full, beside the picture, and kept while nothing about it changes; each
+		// frame only lays it over the picture: in full up to where the singing has got, at half opacity after.
+		key := fmt.Sprintf("%s\x00%d %d %v %v %v %v %p", main, W, H, fs, opts.Color, opts.Stroke, opts.StrokeColor, w.textFont)
+		lineTop := y
+		sungTo = -2
+		if w.layer == nil || w.layerKey != key {
+			w.layer, w.layerKey = image.NewRGBA(img.Bounds()), key
+			target = w.layer
+			drawLine(main, textFace, fs*1.3)
+			target = img
+		} else {
+			// Only the place is worked out again; nothing is drawn.
+			target = image.NewRGBA(image.Rect(0, 0, 0, 0))
+			drawLine(main, textFace, fs*1.3)
+			target = img
+		}
+		top, bottom := max(0, int(lineTop-fs*1.3)), min(int(H), int(lineTop+fs*.6))
+		for py := top; py < bottom; py++ {
+			for px := 0; px < int(W); px++ {
+				src := w.layer.Pix[w.layer.PixOffset(px, py):]
+				if src[3] == 0 {
+					continue
+				}
+				dst := img.Pix[img.PixOffset(px, py):]
+				shade := uint32(255)
+				if px >= sungTo {
+					shade = 128
+				}
+				for c := 0; c < 4; c++ {
+					value := uint32(src[c]) * shade / 255
+					dst[c] = uint8(value + uint32(dst[c])*(255-uint32(src[3])*shade/255)/255)
+				}
+			}
+		}
+	} else {
+		drawLine(main, textFace, fs*1.3)
+	}
 	if opts.ShowTrans && sub != "" {
 		tf := w.face(w.textFont, math.Round(fs*opts.TransScale))
 		y += fs*opts.TransScale*1.05 - fs*1.05 + fs*0.1
@@ -683,6 +809,23 @@ func (w *Window) render() {
 				x += 1.75 * s
 			}
 			drawString(img, iface, x, y, g, color.RGBA{235, 235, 235, 235})
+		}
+	}
+	w.mu.Lock()
+	dump := w.dump
+	w.dump = ""
+	w.mu.Unlock()
+	if dump != "" {
+		picture := image.NewNRGBA(img.Bounds())
+		for i := 0; i < len(img.Pix); i += 4 {
+			for c := 0; c < 3; c++ {
+				picture.Pix[i+c] = uint8(uint32(img.Pix[i+c]) + 40*(255-uint32(img.Pix[i+3]))/255)
+			}
+			picture.Pix[i+3] = 255
+		}
+		if file, err := os.Create(dump); err == nil {
+			png.Encode(file, picture)
+			file.Close()
 		}
 	}
 	w.commit(hwnd, img, X, Y)

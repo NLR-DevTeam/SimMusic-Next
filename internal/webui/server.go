@@ -13,8 +13,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"simmusic/internal/audio"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,6 +25,7 @@ import (
 	"simmusic/internal/core"
 	"simmusic/internal/desklyric"
 	"simmusic/internal/model"
+	"simmusic/internal/overlay"
 	"simmusic/internal/plugin"
 	"simmusic/internal/winx"
 )
@@ -41,7 +44,6 @@ type UI struct {
 	pageToken           string
 	playOpen            atomic.Bool
 	mu                  sync.Mutex
-	toasts              []string
 	alerts              []string
 	musicInvalidations  []string
 	navigations         []map[string]string
@@ -57,10 +59,19 @@ type UI struct {
 	quitOnce            sync.Once
 	lastHangDump        atomic.Int64
 	webviews            webviewHost
+	playRequests        []map[string]any
+	playSignal          chan struct{}
+	overlay             *overlay.Overlay // menus and notices, drawn as windows above the main window
+	pointerChosen       atomic.Int64     // the row chosen in a menu the checks opened at the pointer
 }
 
 func New(a *core.App, desk *desklyric.Window) *UI {
-	u := &UI{app: a, desk: desk, covers: map[string][]byte{}, tracks: map[string]model.Track{}, quit: make(chan struct{})}
+	u := &UI{app: a, desk: desk, covers: map[string][]byte{}, tracks: map[string]model.Track{}, quit: make(chan struct{}), playSignal: make(chan struct{}, 1)}
+	icons, _ := files.ReadFile("web/assets/fonts/remixicon.ttf")
+	u.overlay = overlay.Start(overlay.Host{Owner: func() uintptr { return uintptr(u.hwnd.Load()) }, Font: func() string { return a.Cfg.String("general.font") }, IconFont: icons, Send: u.hostSend,
+		Events: func(event string, menu int, path []int) {
+			u.playRequest(map[string]any{"kind": "menu", "event": event, "menu": menu, "path": path})
+		}})
 	a.OnToast = u.Toast
 	a.OnAlert = u.Alert
 	a.OnPrompt = u.Prompt
@@ -103,14 +114,21 @@ func New(a *core.App, desk *desklyric.Window) *UI {
 	return u
 }
 
-func (u *UI) Invalidate() {}
-func (u *UI) Toast(msg string) {
-	u.mu.Lock()
-	u.toasts = append(u.toasts, msg)
-	if len(u.toasts) > 30 {
-		u.toasts = u.toasts[len(u.toasts)-30:]
+func (u *UI) Invalidate()      {}
+func (u *UI) Toast(msg string) { u.overlay.Toast(msg) }
+
+// ShowPointerMenu opens one of the application's own menus where the pointer is, as the tray icon's menu:
+// an empty label is a separator, choose gets the index of the label chosen.
+func (u *UI) ShowPointerMenu(labels []string, choose func(index int)) {
+	items := make([]overlay.Item, len(labels))
+	for i, label := range labels {
+		items[i] = overlay.Item{Label: label, Separator: label == ""}
 	}
-	u.mu.Unlock()
+	u.overlay.ShowMenuAtPointer(items, func(path []int) {
+		if len(path) == 1 {
+			choose(path[0])
+		}
+	})
 }
 func (u *UI) Alert(msg string) {
 	u.mu.Lock()
@@ -120,8 +138,7 @@ func (u *UI) Alert(msg string) {
 	}
 	u.mu.Unlock()
 }
-func (u *UI) Quit()                { u.quitOnce.Do(func() { u.clearInstall(); close(u.quit) }) }
-func (u *UI) ShowWindow(show bool) { winx.ShowWindowAsync(uintptr(u.hwnd.Load()), show) }
+func (u *UI) Quit() { u.quitOnce.Do(func() { u.clearInstall(); close(u.quit) }) }
 
 func (u *UI) Start() (string, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -183,6 +200,10 @@ func (u *UI) Start() (string, error) {
 			u.cover(w, r)
 			return
 		}
+		if rel == "playPreview" {
+			u.playPreview(w, r)
+			return
+		}
 		if rel == "theme" {
 			path := u.app.Cfg.String("list.themeImageSrc")
 			if path == "" {
@@ -215,6 +236,8 @@ func (u *UI) sameOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	return origin == u.origin || origin == "" && r.Header.Get("Sec-Fetch-Site") == "same-origin"
 }
+
+var dialogName = regexp.MustCompile(`^simDialog[0-9]{1,12}$`)
 
 type request struct {
 	Action string        `json:"action"`
@@ -256,12 +279,12 @@ func (u *UI) snapshot() any {
 	s := u.app.Snapshot()
 	u.remember(s.Queue)
 	u.mu.Lock()
-	msgs, alerts := u.toasts, u.alerts
+	alerts := u.alerts
 	invalidations, navigations := u.musicInvalidations, u.navigations
 	u.musicInvalidations, u.navigations = nil, nil
-	u.toasts, u.alerts = nil, nil
+	u.alerts = nil
 	u.mu.Unlock()
-	return map[string]any{"player": s, "sleep": u.app.Sleep(), "downloads": u.app.Downloads.Tasks(), "toasts": msgs, "alerts": alerts, "prompts": u.pendingPrompts(), "musicInvalidations": invalidations, "navigations": navigations, "deskVisible": u.app.State.Bool("desk.visible"), "windowMaximized": u.maximized(), "panel": u.activePanel()}
+	return map[string]any{"player": s, "sleep": u.app.Sleep(), "downloads": u.app.Downloads.Tasks(), "alerts": alerts, "prompts": u.pendingPrompts(), "musicInvalidations": invalidations, "navigations": navigations, "deskVisible": u.app.State.Bool("desk.visible"), "windowMaximized": u.maximized(), "panel": u.activePanel(), "playView": u.playViewKey()}
 }
 
 func (u *UI) catalog() any {
@@ -277,7 +300,8 @@ func (u *UI) catalog() any {
 	for _, l := range lists {
 		u.remember(l.Tracks)
 	}
-	return map[string]any{"schemes": u.app.Plugins.Schemes(), "plugins": ps, "playlists": lists, "config": u.app.Cfg.All(), "version": core.Version, "downloadDir": u.app.DownloadDir(), "dataDir": u.app.DataDir, "runtime": runtime.Version() + " · " + runtime.GOOS + "/" + runtime.GOARCH, "lyricsShown": u.app.State.Get("lrcShow") != false, "eqBands": audio.EQBands, "eqPresets": audio.EQPresets}
+	u.syncPlayView()
+	return map[string]any{"playPages": u.playPages(), "playPage": u.activePlayPage(), "schemes": u.app.Plugins.Schemes(), "plugins": ps, "playlists": lists, "config": u.app.Cfg.All(), "version": core.Version, "downloadDir": u.app.DownloadDir(), "dataDir": u.app.DataDir, "runtime": runtime.Version() + " · " + runtime.GOOS + "/" + runtime.GOARCH, "lyricsShown": u.app.State.Get("lrcShow") != false, "eqBands": audio.EQBands, "eqPresets": audio.EQPresets}
 }
 
 func (u *UI) call(q request) (any, error) {
@@ -473,6 +497,13 @@ func (u *UI) call(q request) (any, error) {
 			return nil, err
 		}
 		a.Cfg.Set(q.Key, q.Value)
+		if q.Key == "play.page" {
+			// A new choice gets a new chance, whatever happened to the last one.
+			u.webviews.mu.Lock()
+			u.webviews.playFailed = nil
+			u.webviews.mu.Unlock()
+			u.syncPlayView()
+		}
 	case "sleep":
 		if q.Number <= 0 || q.Number > 1440 {
 			return nil, errors.New("定时时间应在 0 至 1440 分钟之间")
@@ -511,6 +542,81 @@ func (u *UI) call(q request) (any, error) {
 		a.State.Set("desk.visible", !a.State.Bool("desk.visible"))
 	case "playPage":
 		u.playOpen.Store(q.Value == true)
+	case "toast":
+		u.Toast(q.Text)
+	case "menu", "menuChildren":
+		// A menu of the host page, drawn as a window: { id, x, y, items }, and later the rows of a row
+		// that reads them when opened: { id, path, items }.
+		var menu struct {
+			ID    int `json:"id"`
+			X, Y  float64
+			Path  []int          `json:"path"`
+			Items []overlay.Item `json:"items"`
+		}
+		encoded, _ := json.Marshal(q.Value)
+		if err := json.Unmarshal(encoded, &menu); err != nil {
+			return nil, errors.New("请求格式错误")
+		}
+		if q.Action == "menu" {
+			u.overlay.ShowMenu(menu.ID, menu.Items, menu.X, menu.Y)
+		} else {
+			u.overlay.SetChildren(menu.ID, menu.Path, menu.Items)
+		}
+	case "overlayInspect", "overlayChoose", "overlayDump", "deskDump", "pointerMenu", "pointerChosen":
+		// Only with the debugging port: the checks read what the overlay shows and choose a row of a menu.
+		if os.Getenv("SIMMUSIC_CEF_DEBUG") == "" {
+			return nil, errors.New("未知操作")
+		}
+		if q.Action == "pointerMenu" {
+			// A menu at the pointer, as the tray icon opens one; what is chosen is read back with pointerChosen.
+			u.pointerChosen.Store(-1)
+			u.ShowPointerMenu(q.Order, func(index int) { u.pointerChosen.Store(int64(index)) })
+			return true, nil
+		}
+		if q.Action == "pointerChosen" {
+			return u.pointerChosen.Load(), nil
+		}
+		if q.Action == "deskDump" {
+			dir := filepath.Join(os.TempDir(), "SimMusicNext", "screenshots")
+			os.MkdirAll(dir, 0o755)
+			if u.desk != nil {
+				u.desk.Dump(filepath.Join(dir, "desktop-lyrics.png"))
+			}
+			return filepath.Join(dir, "desktop-lyrics.png"), nil
+		}
+		if q.Action == "overlayDump" {
+			// Pictures for looking at go to the screenshots directory under the system temporary directory, nowhere else.
+			dir := filepath.Join(os.TempDir(), "SimMusicNext", "screenshots")
+			os.MkdirAll(dir, 0o755)
+			return append(u.overlay.Dump(dir, 255), u.overlay.Dump(dir, 24)...), nil
+		}
+		if q.Action == "overlayChoose" {
+			var path []int
+			encoded, _ := json.Marshal(q.Value)
+			json.Unmarshal(encoded, &path)
+			u.overlay.Choose(path)
+			return true, nil
+		}
+		return u.overlay.Inspect(), nil
+	case "dialogWindow":
+		// A dialog of the host page in its own window: sized to its content, shown, closed.
+		if !dialogName.MatchString(q.ID) {
+			return nil, errors.New("请求格式错误")
+		}
+		switch q.Text {
+		case "size":
+			u.hostSend("win", q.ID, "size", strconv.Itoa(q.Index), strconv.Itoa(q.To))
+		case "show":
+			u.hostSend("win", q.ID, "show", "", "")
+		case "close":
+			u.hostSend("close", q.ID)
+		}
+	case "playView":
+		return u.showPlayView(q.Value == true, q.Text), nil
+	case "playLayout":
+		u.playLayout(q.Value)
+	case "playWait":
+		return u.playWait(), nil
 	case "lyricsShown":
 		a.State.Set("lrcShow", q.Value == true)
 	case "pluginPermissions":

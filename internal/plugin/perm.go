@@ -26,7 +26,9 @@ const (
 	PermSidebar        = "sidebar"  // 在应用侧栏显示分组及歌单入口
 	PermTrackMenu      = "trackMenu"
 	PermSchemeExtend   = "scheme.extend"
-	PermWebview        = "webview" // 在主界面或独立窗口中显示扩展自己的网页
+	PermWebview        = "webview"  // 在主界面或独立窗口中显示扩展自己的网页
+	PermPlayer         = "player"   // 播放控制：读取播放状态、队列与歌词，执行播放页能做的全部操作
+	PermPlayPage       = "playPage" // 提供播放页；页面的显示与隐藏完全由宿主控制，不需要 webview 权限
 )
 
 // PermInfo 描述一个权限，用于界面展示。
@@ -44,6 +46,8 @@ var permInfos = map[string]PermInfo{
 	PermFSRead:         {PermFSRead, "读取文件", "读取扩展数据目录以外的文件，包括读取音频文件的元数据", 0xED0F, false},
 	PermFSWrite:        {PermFSWrite, "写入文件", "在扩展数据目录以外创建、修改或删除文件，包括修改音频文件的元数据", 0xECDB, true},
 	PermWebview:        {PermWebview, "网页界面", "在主界面内或独立窗口中显示扩展自己的网页", 0xF2C4, false},
+	PermPlayer:         {PermPlayer, "播放控制", "读取播放状态、播放队列与歌词，控制播放、音量、倍速、播放队列与睡眠定时", 0xF00B, false},
+	PermPlayPage:       {PermPlayPage, "播放页", "提供可在设置中选用的播放页，由主界面负责显示与隐藏", 0xF2C4, false},
 	PermShell:          {PermShell, "系统集成", "修改系统右键菜单、在资源管理器中打开文件等", 0xF1F6, true},
 	PermSidebar:        {PermSidebar, "侧栏显示", "在应用侧栏显示此扩展的分组和歌单入口", 0xF011, false},
 	PermTrackMenu:      {PermTrackMenu, "歌曲菜单", "在歌曲列表、播放详情和播放队列中提供附加操作", 0xEF79, false},

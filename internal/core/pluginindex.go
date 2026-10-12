@@ -111,6 +111,10 @@ func (a *App) ClearPluginFields(id string, fields, ids []string) {
 		for _, field := range fields {
 			delete(e.Fields, field)
 			switch {
+			case field == "lyrics":
+				// Lyrics are shared by playback and download; neither scene may keep using the old text.
+				delete(e.Scenes, "play")
+				delete(e.Scenes, "download")
 			case slices.Contains(playFields, field):
 				delete(e.Scenes, "play")
 			case slices.Contains(downloadFields, field):

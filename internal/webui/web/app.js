@@ -36,11 +36,8 @@ let displayedSongKey = "";
 let trackDisplayGeneration = 0;
 let trackDisplayPending = false;
 let trackCoverImages = [];
-let lyricsSignature = "";
 let queueSignature = "";
 let catalogSignature = "";
-let activeLyric = -1;
-let lyricsManualTimer;
 let downloadSignature = "";
 let previousVolume = .8;
 let speed = 1;
@@ -59,6 +56,14 @@ let shownPanel = "";
 let panelSignature = "";
 let menuOpening = 0;
 let panelDrift = null;
+// The play page is an extension's page, the bundled one or another: also a separate browser of the host,
+// over the whole window. Opening, closing and what is shown beside the player are passed on to it.
+let externalShown = false;
+let externalKey = "";
+let externalLive = true;
+let playSide = "";
+let playLayoutSignature = "";
+let playWaiting = false;
 
 const api = async (action, data = {}) => {
     const response = await fetch("api", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...data }) });
@@ -107,22 +112,20 @@ const refreshCatalog = async () => {
     catalog.playlists ??= [];
     renderNavigation();
     applyConfig();
+    applyPlayTitle();
+    // The extension page in use went away or was exchanged: the play page closes rather than change under the user.
+    if (externalShown && catalog.playPage?.key !== externalKey) closeExternalPlay();
     if (page.kind === "menu" && !catalog.plugins.some(plugin => plugin.manifest.id === page.plugin && plugin.sidebar?.items?.some(item => item.id === page.id))) await navigate({ kind: "home" });
     if (page.kind === "plugins" && !dragActive) renderPlugins();
 };
 const applyConfig = () => {
     const config = catalog.config;
-    const classes = { playBtnColor: "list.themedButton", themeBlur: "list.themeImageBlur", darkPlayer: "play.dark", albumScale: "play.coverScale", threeEffect: "play.effect3D", themeImage: "list.themeImage", blurLyrics: "lrc.blur" };
-    Object.entries(classes).forEach(([className, key]) => document.body.classList.toggle(className, key === "lrc.align" ? config[key] === "center" : !!config[key]));
-    document.body.classList.toggle("staticBackdrop", !config["play.dynamicBg"]);
+    const classes = { playBtnColor: "list.themedButton", themeBlur: "list.themeImageBlur", themeImage: "list.themeImage" };
+    Object.entries(classes).forEach(([className, key]) => document.body.classList.toggle(className, !!config[key]));
     // The family is quoted for CSS; names come from the system's own font list.
     const appFont = String(config["general.font"] || "").replace(/["\\]/g, "");
     if (appFont) simCss(document.documentElement).setProperty("--appFont", `"${appFont}"`); else simCss(document.documentElement).removeProperty("--appFont");
     simCss(document.documentElement).setProperty("--sideWidth", `${Math.min(360, Math.max(150, config["list.leftBarWidth"] || 200))}px`);
-    simCss(lyricsView).setProperty("--lyricSize", `${(config["lrc.size"] || 1.5) * 24}px`);
-    simCss(lyricsView).setProperty("--lineSpace", `${config["lrc.spacing"] ?? .5}em`);
-    simCss(lyricsView).setProperty("--lrcTranslation", `${config["lrc.transSize"] ?? .8}em`);
-    simCss(lyricsView).setProperty("--align", config["lrc.align"] === "center" ? "center" : "left");
     updateBackdrop();
 };
 const updateBackdrop = () => {
@@ -246,15 +249,16 @@ const emptyState = () => `<div class="emptyState">${icon(icons.home)}</div>`;
 // The panel covers the content area from the top of the window down to the player bar. It is a native
 // window above this page, so it is hidden under whatever fills the window and cut around what stays
 // above it: the window buttons, and the menus and notices that reach into it.
+const elementBox = element => { const rect = element.getBoundingClientRect(); return [Math.floor(rect.left), Math.floor(rect.top), Math.ceil(rect.width), Math.ceil(rect.height)]; };
 const layoutPanel = () => {
     if (!shownPanel) return;
     requestAnimationFrame(layoutPanel);
     const content = mainContent.getBoundingClientRect();
-    const box = element => { const rect = element.getBoundingClientRect(); return [Math.floor(rect.left), Math.floor(rect.top), Math.ceil(rect.width), Math.ceil(rect.height)]; };
+    const box = elementBox;
     const value = {
         left: Math.ceil(content.left) + 1, top: 0, right: 0, bottom: Math.max(0, Math.ceil(innerHeight - playerBar.getBoundingClientRect().top)),
-        visible: playPage.hidden && !document.querySelector("dialog[open]") && !document.fullscreenElement,
-        holes: [...document.querySelectorAll(".titleActions, .dropdown.active, .contextSubmenu.active, #SimsvToastContainer > div, .dragGhost, #connectionBanner")].map(box).filter(rect => rect[2] > 0 && rect[3] > 0)
+        visible: !externalShown && !document.fullscreenElement,
+        holes: [...document.querySelectorAll(".titleActions, .dropdown.active, .dragGhost, #connectionBanner")].map(box).filter(rect => rect[2] > 0 && rect[3] > 0)
     };
     const signature = JSON.stringify(value);
     if (signature === panelSignature) return;
@@ -504,7 +508,7 @@ const renderVisibleTracks = () => {
     songInfo.table(visibleTracks);
     dragRefresh?.();
 };
-window.addEventListener("resize", () => { tableStart = -1; renderVisibleTracks(); if (!playPage.hidden) updateLyrics(true); });
+window.addEventListener("resize", () => { tableStart = -1; renderVisibleTracks(); });
 const updateRowStates = () => {
     mainContent.querySelectorAll(".trackRow").forEach(row => {
         const track = tableTracks[Number(row.dataset.row)];
@@ -540,7 +544,83 @@ const locateCurrent = () => {
         setTimeout(() => row?.classList.remove("located"), 300);
     }, 50);
 };
-const showContext = simTrackMenu.show;
+// Menus are drawn by the host as windows above this one: they fade and cast their shadow whatever is
+// beneath them, the play page included. The rows are described once; what a row does stays here, and
+// the rows of a row that reads them when opened are sent when the host asks.
+let shownMenu = null;
+let menuSerial = 0;
+// A separator only stands between rows: one that would open or close a list, or follow another, is left out.
+const menuRows = items => shownRows(items).map(item => item.separator ? { separator: true } : { label: String(item.label ?? ""), icon: menuIcon(item.icon), children: Array.isArray(item.children) ? menuRows(item.children) : undefined, lazy: typeof item.children === "function" });
+// The rows as they were sent: a path counts the rows shown, without the separators left out.
+const shownRows = items => (items || []).filter((item, index, list) => !item.separator || index > 0 && index < list.length - 1 && !list[index - 1].separator && list.slice(index + 1).some(later => !later.separator));
+const menuRow = path => path.reduce((row, index) => shownRows(row.loaded || row.children)[index], { children: shownMenu.items });
+const showContext = (items, x, y) => {
+    shownMenu = { id: ++menuSerial, items };
+    api("menu", { value: { id: shownMenu.id, x, y, items: menuRows(items) } }).catch(() => {});
+};
+const handleMenuEvent = async request => {
+    if (!shownMenu || request.menu !== shownMenu.id) return;
+    const menu = shownMenu;
+    if (request.event === "closed") { shownMenu = null; return; }
+    const row = menuRow(request.path);
+    if (request.event === "action") { shownMenu = null; row.action?.(); return; }
+    try { row.loaded = await row.children() || []; }
+    catch (error) { row.loaded = [{ label: error.message }]; }
+    if (shownMenu === menu) api("menuChildren", { value: { id: menu.id, path: request.path, items: menuRows(row.loaded) } }).catch(() => {});
+};
+// Notices are windows of the host as well.
+su5.toast = text => { api("toast", { text: String(text) }).catch(() => {}); };
+// A dialog is a window of its own, modal to this one. It is built here as before; showing it opens the
+// window and moves the dialog into it, with its handlers, and the window is as large as the dialog.
+const dialogWindows = new Map();
+let dialogSerial = 0;
+const dialogOpen = () => dialogWindows.size > 0;
+su5.dialog.find = id => { for (const entry of dialogWindows.values()) { const found = entry.popup?.document.getElementById(id); if (found) return found; } };
+su5.dialog.show = (id, isShow = true) => {
+    const shown = dialogWindows.get(id);
+    if (!isShow) {
+        document.getElementById(id)?.remove();
+        if (!shown || shown.closing) return;
+        shown.closing = true;
+        dialogWindows.delete(id);
+        api("dialogWindow", { id: shown.name, text: "close" }).catch(() => {});
+        return;
+    }
+    const dialog = document.getElementById(id);
+    if (!dialog || shown) return;
+    const box = dialog.firstElementChild;
+    const entry = { id, dialog, name: `simDialog${++dialogSerial}`, width: box.offsetWidth, closing: false };
+    dialogWindows.set(id, entry);
+    entry.popup = window.open("dialog.html", entry.name, `popup,width=${entry.width},height=${box.offsetHeight}`);
+    if (!entry.popup) dialogWindows.delete(id);
+};
+// The window has loaded: the dialog moves in and the window is shown at its size.
+window.dialogReady = popup => {
+    const entry = [...dialogWindows.values()].find(item => item.name === popup.name);
+    if (!entry) { popup.close(); return; }
+    const page = popup.document;
+    page.body.append(entry.dialog);
+    simCssAdopt(entry.dialog);
+    const font = getComputedStyle(document.documentElement).getPropertyValue("--appFont");
+    if (font) simCss(page.documentElement).setProperty("--appFont", font);
+    simCss(page.documentElement).setProperty("--dialogMax", `${Math.max(320, Math.round(screen.availHeight * .85))}px`);
+    const box = entry.dialog.firstElementChild;
+    let height = 0;
+    const fit = () => { if (box.offsetHeight === height) return; height = box.offsetHeight; return api("dialogWindow", { id: entry.name, text: "size", index: entry.width, to: height }).catch(() => {}); };
+    new popup.ResizeObserver(fit).observe(box);
+    // Closed from outside (its close button, Escape, Alt+F4): the dialog is cancelled. A dialog that asks
+    // something answers as its cancel button does, one with a single button as that button does; any
+    // other dialog simply goes, and none of its buttons (a reset, say) is pressed for it.
+    popup.addEventListener("pagehide", () => {
+        if (entry.closing) return;
+        entry.closing = true;
+        dialogWindows.delete(entry.id);
+        const footer = [entry.dialog.querySelector(".buttons"), entry.dialog.querySelector(".modalContent > :last-child")].find(element => element?.querySelector("button")) || entry.dialog;
+        const buttons = footer.querySelectorAll("button");
+        (footer.querySelector("button.cancel") || (buttons.length === 1 ? buttons[0] : null))?.click();
+    });
+    Promise.resolve(fit()).then(() => api("dialogWindow", { id: entry.name, text: "show" })).then(() => entry.dialog.querySelector("input:not([type=checkbox]):not([type=range]), textarea")?.select?.()).catch(() => {});
+};
 const playlistActions = tracks => [
     // A playlist that already holds every selected song is ticked; choosing it takes them out again.
     ...catalog.playlists.map(playlist => {
@@ -577,7 +657,7 @@ const showTrackContext = async (tracks, x, y, scene = "list") => {
         speedMenuItem(),
         { label: "均衡器…", icon: "EC9D", action: showEqualizer },
         { label: "输出设备", icon: "F2A2", children: async () => (await outputDevices()).map(({ value, label }) => ({ label, icon: (catalog.config["audio.device"] || "") === value ? "EB7B" : "", action: () => setConfig("audio.device", value) })) },
-        { label: "清空播放列表", icon: "EC2A", action: () => clearQueueButton.click() },
+        { label: "清空播放列表", icon: "EC2A", action: async () => { if (await su5.dialog.confirm("清空播放队列？")) await run("clearQueue"); } },
         { label: "停止播放", icon: "F1A1", action: () => run("stop") }
     );
     if (scene === "list" && page.kind === "playlist") items.push({ label: "从歌单移除", icon: "EC2A", action: async () => { await run("removePlaylist", { id: page.id, tracks }); await refreshCatalog(); navigate(page); } });
@@ -646,15 +726,14 @@ const showSearchResults = () => {
 
 const settingGroups = [
     ["通用配置", [["general.noBackground", "不驻留后台进程", "toggle", "关闭主界面时停止播放并完全退出应用。"], ["general.font", "界面字体", "select", "", [["", "微软雅黑"]]], ["clearIndex", "清理索引缓存", "button", "定期清理可保持 SimMusic 运行性能；若您更改了音频元数据，亦可在此清理缓存以重新读取。"]]],
-    ["歌单界面", [["list.showLocate", "显示曲目定位按钮", "toggle"], ["list.themedButton", "对播放按钮应用主题色", "toggle"], ["list.themeImage", "启用主题图片", "toggle", "在 SimMusic 主界面显示主题图片。"], ["list.themeImageType", "主题图片来源", "select", "", [["cover", "曲目封面"], ["local", "本地文件"]]], ["list.themeImageBlur", "图片模糊效果", "toggle"], ["chooseTheme", "选择本地主题图片", "button"]]],
-    ["播放界面", [["play.dark", "播放页深色模式", "toggle"], ["play.dynamicBg", "背景动态混色", "toggle", "关闭后可减少播放页对硬件资源的占用。"], ["play.effect3D", "3D 特效", "toggle", "在播放页的歌曲信息、播放列表与歌词视图使用 3D 视觉效果。"], ["play.coverScale", "专辑封面缩放", "toggle", "在按下「播放」或「暂停」时对播放页专辑封面使用缩放动效。"]]],
-    ["播放控制", [["ctl.quickReplay", "快速重播", "toggle", "在曲目即将结束时按「快退」按钮以回到当前曲目的开头。"], ["ctl.fade", "音频淡入淡出", "toggle", "在按下「播放」或「暂停」时对音频的输出音量使用渐变效果。"], ["audio.device", "音频输出设备", "select", "", [["", "系统默认"]]], ["equalizer", "均衡器", "button"]]],
+    ["界面设置", [["list.showLocate", "显示曲目定位按钮", "toggle"], ["list.themedButton", "对播放按钮应用主题色", "toggle"], ["list.themeImage", "启用主题图片", "toggle", "在 SimMusic 主界面显示主题图片。"], ["list.themeImageType", "主题图片来源", "select", "", [["cover", "曲目封面"], ["local", "本地文件"]]], ["list.themeImageBlur", "图片模糊效果", "toggle"], ["chooseTheme", "选择本地主题图片", "button"], ["playPage", "播放页选项", "button"]]],
+    ["播放控制", [["ctl.quickReplay", "快速重播", "toggle", "在曲目即将结束时按「快退」按钮以回到当前曲目的开头。"], ["ctl.fade", "音频淡入淡出", "toggle", "在按下「播放」或「暂停」时对音频的输出音量使用渐变效果。"], ["audio.device", "音频输出设备", "select", "", [["", "系统默认"]]], ["equalizer", "均衡器", "button"], ["lrc.perWord", "逐字歌词解析", "select", "", [["source", "按原歌词处理"], ["extend", "将原歌词中存在的逐字歌词扩展到全曲"], ["all", "所有歌曲使用逐字歌词"]]]]],
     ["睡眠定时", [["sleep.extendToEnd", "延长时间至曲目结尾", "toggle", "在曲目结尾后再暂停播放；在延长时间时执行暂停、切歌操作将会退出睡眠定时。"], ["sleep.action", "定时结束后", "select", "选择「关机」或「休眠」时，SimMusic 将在执行操作前 60 秒弹出提示，若您还需使用设备，可随时取消。", [["none", "不执行操作"], ["shutdown", "关机"], ["sleep", "休眠"]]], ["sleepTimer", "开启睡眠定时", "button"]]],
-    ["歌词视图", [["lrc.blur", "层级虚化", "toggle", "若无需虚化效果或需要提升性能可关闭此功能。"], ["lrc.align", "文字对齐", "select", "此配置项切换曲目生效。", [["left", "左端对齐"], ["center", "居中对齐"]]], ["lrc.size", "歌词字号", "slider", "", [1, 3]], ["lrc.spacing", "歌词间距", "slider", "", [.2, 1]], ["lrc.multiLang", "歌词多语言支持", "toggle", "开启后，时间戳一致的不同歌词将作为多语言翻译同时渲染。此配置项切换曲目生效。"], ["lrc.transSize", "翻译字号", "slider", "同时控制歌词视图与桌面歌词中的翻译字号。", [.5, 1]]]],
+    ["歌词视图", [["lrc.multiLang", "歌词多语言支持", "toggle", "开启后，时间戳一致的不同歌词将作为多语言翻译同时渲染。此配置项切换曲目生效。"], ["lrc.transSize", "翻译字号", "slider", "同时控制歌词视图与桌面歌词中的翻译字号。", [.5, 1]]]],
     ["桌面歌词", [["dl.rememberState", "记忆开启状态", "toggle"], ["dl.compact", "精简模式", "toggle", "开启后，桌面歌词窗口将在暂停时自动隐藏，且不显示播放控件"], ["dl.hideCapture", "在截图中隐藏", "toggle", "其他应用截图或录屏时隐藏桌面歌词的内容，与多数截图或录屏软件相兼容，支持 Windows 10 2004 以上版本及 Windows 11。此功能不会影响您查看歌词，对采集卡等外置硬件无效。"], ["dl.autoClose", "在播放页自动关闭", "toggle", "当 SimMusic 主窗口打开播放页时自动关闭桌面歌词。"], ["dl.showTrans", "显示歌词翻译", "toggle"], ["dl.color", "字体颜色", "color"], ["dl.border", "启用边框", "toggle"], ["dl.borderColor", "边框颜色", "color"], ["dl.size", "字体大小", "slider", "", [20, 60]], ["dl.width", "歌词区域宽度", "slider", "", [500, 1920]], ["dl.center", "始终居中", "toggle", "无视用户左右拖拽操作，保持桌面歌词在屏幕中央。"]]],
     ["曲目下载", [["down.parallel", "并行下载数", "select", "下载在线歌曲时并行下载的任务数量。", [1, 2, 3, 4, 5].map(value => [String(value), `${value} 首曲目`])], ["down.nameFormat", "命名格式", "text", "可使用 [title] 表示歌曲名，[artist] 表示艺术家。SimMusic 会自动处理 Windows 无法写入的文件名。"], ["down.writeTitle", "写入曲目标题", "toggle"], ["down.writeArtist", "写入艺术家与专辑名", "toggle"], ["down.writeCover", "写入专辑封面", "toggle"], ["down.lyricMode", "歌词下载方式", "select", "", [["embed", "嵌入音频"], ["file", "独立 LRC"], ["none", "不下载歌词"]]], ["chooseDownloadDir", "下载目录", "button"]]]
 ];
-const settingActions = { chooseTheme: () => run("chooseTheme"), chooseDownloadDir: async () => { await run("chooseDownloadDir"); await refreshCatalog(); showDownloadDir(); }, equalizer: () => showEqualizer(), sleepTimer: () => showSleepTimer(), clearIndex: async () => { if (await run("clearIndex") === null) return; lastCurrentKey = ""; updateIndexSize(); } };
+const settingActions = { playPage: () => showPlayPages(), chooseTheme: () => run("chooseTheme"), chooseDownloadDir: async () => { await run("chooseDownloadDir"); await refreshCatalog(); showDownloadDir(); }, equalizer: () => showEqualizer(), sleepTimer: () => showSleepTimer(), clearIndex: async () => { if (await run("clearIndex") === null) return; lastCurrentKey = ""; updateIndexSize(); } };
 // The row shows the directory in use; it is rewritten once a new one has been chosen.
 const showDownloadDir = () => { const text = mainContent.querySelector("[data-setting-key=chooseDownloadDir] .settingText p"); if (text) text.textContent = catalog.downloadDir; };
 const humanSize = bytes => bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
@@ -766,14 +845,43 @@ const fontOptions = async () => {
     if (!options.some(option => option.value === saved)) options.push({ value: saved, label: saved });
     return options;
 };
+// Each family previews itself: its entry in the list is drawn in that font. That loads every installed
+// font, so it happens behind the page, a few entries at a time while the page is idle.
+const previewFonts = row => {
+    const options = [...row.querySelectorAll(".SimsvOptionsContainer > div")];
+    let next = 0;
+    const step = deadline => {
+        if (!row.isConnected) return;
+        for (let count = 0; next < options.length && count < 4 && (!count || deadline.timeRemaining() > 4); count++, next++)
+            simCss(options[next]).fontFamily = `"${(options[next].dataset.value || "Microsoft YaHei").replace(/["\\]/g, "")}", "Microsoft YaHei"`;
+        if (next < options.length) requestIdleCallback(step, { timeout: 500 });
+    };
+    requestIdleCallback(step, { timeout: 500 });
+};
+// Lists that take time to read never hold the settings page back. It is drawn at once with what the
+// last visit read, or with the saved choice alone, and the row is exchanged when the list arrives.
+const listedOptions = { "audio.device": () => outputDevices(), "general.font": () => fontOptions() };
+const knownOptions = {};
+const settingItem = ([key, label, type, desc = "", extra]) => {
+    const saved = catalog.config[key] || "";
+    const pending = [{ value: saved, label: key === "general.font" ? saved || "微软雅黑" : saved ? "" : "系统默认" }];
+    return { key, label, type, desc: key === "chooseDownloadDir" ? catalog.downloadDir : desc, button: key === "clearIndex" ? "清理" : "", options: listedOptions[key] ? knownOptions[key] || pending : type === "select" ? extra.map(([value, label]) => ({ value, label })) : undefined, min: extra?.[0], max: extra?.[1] };
+};
 const renderSettings = async () => {
     const generation = pageGeneration;
-    const [deviceOptions, fonts] = [await outputDevices(), await fontOptions()];
-    if (generation !== pageGeneration) return;
     mainContent.innerHTML = pageHeader("软件设置", "", icons.settings) + `<div class="pageBody" id="settingsBody"></div>`;
-    settingGroups.forEach(([title, items]) => appendSettingsSection(title, items.map(([key, label, type, desc = "", extra]) => ({ key, label, type, desc: key === "chooseDownloadDir" ? catalog.downloadDir : desc, button: key === "clearIndex" ? "清理" : "", options: key === "audio.device" ? deviceOptions : key === "general.font" ? fonts : type === "select" ? extra.map(([value, label]) => ({ value, label })) : undefined, min: extra?.[0], max: extra?.[1] })), catalog.config, settingsBody));
-    // Each family previews itself: its entry in the list is drawn in that font.
-    settingsBody.querySelectorAll('[data-setting-key="general.font"] .SimsvOptionsContainer > div').forEach(option => simCss(option).fontFamily = `"${(option.dataset.value || "Microsoft YaHei").replace(/["\\]/g, "")}", "Microsoft YaHei"`);
+    settingGroups.forEach(([title, items]) => appendSettingsSection(title, items.map(settingItem), catalog.config, settingsBody));
+    const fontRow = () => settingsBody.querySelector('[data-setting-key="general.font"]');
+    if (knownOptions["general.font"]) previewFonts(fontRow());
+    Object.entries(listedOptions).forEach(async ([key, read]) => {
+        const shown = JSON.stringify(knownOptions[key]);
+        const options = await read();
+        if (generation !== pageGeneration || !window.settingsBody || JSON.stringify(options) === shown) return;
+        knownOptions[key] = options;
+        const definition = settingGroups.flatMap(group => group[1]).find(item => item[0] === key);
+        settingsBody.querySelector(`[data-setting-key="${key}"]`).replaceWith(makeSetting(settingItem(definition), catalog.config));
+        if (key === "general.font") previewFonts(fontRow());
+    });
     updateIndexSize();
     for (const plugin of catalog.plugins.filter(item => item.running)) {
         const data = await run("pluginSettings", { plugin: plugin.manifest.id });
@@ -909,7 +1017,7 @@ const showEqualizer = () => {
 // Presets only choose a duration; the single primary button starts the timer.
 const showSleepTimer = () => {
     const { id, content } = su5.dialog.create("睡眠定时");
-    content.innerHTML = `<div class="timerPresets">${[5, 10, 15, 30, 60].map(minutes => `<button class="sub" data-minutes="${minutes}">${minutes} 分钟</button>`).join("")}</div><form class="timerCustom"><span>自定义时长</span><label class="input"><input name="minutes" inputmode="numeric" maxlength="4" value="30"><span>分钟</span></label></form><div class="buttons"><button class="sub">取消</button><button>开启定时</button></div>`;
+    content.innerHTML = `<div class="timerPresets">${[5, 10, 15, 30, 60].map(minutes => `<button class="sub" data-minutes="${minutes}">${minutes} 分钟</button>`).join("")}</div><form class="timerCustom"><span>自定义时长</span><label class="input"><input name="minutes" inputmode="numeric" maxlength="4" value="30"><span>分钟</span></label></form><div class="buttons"><button class="sub cancel">取消</button><button>开启定时</button></div>`;
     const form = content.querySelector("form");
     const field = form.querySelector(".input");
     const input = form.elements.minutes;
@@ -976,7 +1084,7 @@ document.addEventListener("dragover", event => { if (event.dataTransfer.types.in
 document.addEventListener("drop", async event => {
     if (!event.dataTransfer.types.includes("Files")) return;
     event.preventDefault();
-    if (document.querySelector("dialog[open]")) return;
+    if (dialogOpen()) return;
     const target = page;
     const result = await run("dropFiles", { text: target.kind, plugin: target.plugin || "", id: target.id || "" });
     if (result?.refresh) { await refreshCatalog(); if (page === target) navigate(target); }
@@ -1109,7 +1217,7 @@ const showInstaller = (manifest, development) => new Promise(resolve => {
     content.closest("dialog").classList.add("installDialog");
     const permissions = manifest.permissionList || [];
     const denied = new Set();
-    content.innerHTML = `<div class="installHeader"><div><div class="installName">${escapeText(manifest.name || manifest.id)}</div><div class="installMeta">${escapeText([`版本 ${manifest.version || "未知"}`, manifest.author].filter(Boolean).join(" · "))}</div></div></div>${manifest.description ? `<p class="installDesc">${escapeText(manifest.description)}</p>` : ""}<button class="installSummary"><span>权限</span><small></small>${icon("EA6E")}</button><div class="permissionList installPermissions"></div><p class="installNote">${update ? `将替换已安装的 ${escapeText(manifest.installedVersion || "旧")} 版本。` : ""}${development ? "直接加载原文件夹，不复制源文件。" : ""}权限可在安装后随时更改。</p><div class="buttons"><button class="sub">取消</button><button>${update ? "更新" : "安装"}</button></div>`;
+    content.innerHTML = `<div class="installHeader"><div><div class="installName">${escapeText(manifest.name || manifest.id)}</div><div class="installMeta">${escapeText([`版本 ${manifest.version || "未知"}`, manifest.author].filter(Boolean).join(" · "))}</div></div></div>${manifest.description ? `<p class="installDesc">${escapeText(manifest.description)}</p>` : ""}<button class="installSummary"><span>权限</span><small></small>${icon("EA6E")}</button><div class="permissionList installPermissions"></div><p class="installNote">${update ? `将替换已安装的 ${escapeText(manifest.installedVersion || "旧")} 版本。` : ""}${development ? "直接加载原文件夹，不复制源文件。" : ""}权限可在安装后随时更改。</p><div class="buttons"><button class="sub cancel">取消</button><button>${update ? "更新" : "安装"}</button></div>`;
     const summary = content.querySelector(".installSummary");
     const list = content.querySelector(".installPermissions");
     const sync = () => summary.querySelector("small").textContent = !permissions.length ? "无需任何权限" : denied.size ? `${permissions.length} 项，已关闭 ${denied.size} 项` : `${permissions.length} 项`;
@@ -1131,6 +1239,30 @@ const showInstaller = (manifest, development) => new Promise(resolve => {
 });
 const renderAbout = () => {
     mainContent.innerHTML = `<div class="aboutPage"><img src="assets/icon.png"><h1>SimMusic Next</h1><p>高颜值插件化音频播放器</p><small>Copyright © ${new Date().getFullYear()} NLR DevTeam</small></div>`;
+};
+// The pages on offer, the bundled one first. The choice applies at once.
+const showPlayPages = async () => {
+    await refreshCatalog();
+    const { id, content } = su5.dialog.create("播放页选项");
+    content.closest("dialog").classList.add("playPagesDialog");
+    const list = document.createElement("div");
+    list.className = "playPageList";
+    catalog.playPages.forEach(item => {
+        const row = document.createElement("button");
+        row.className = "playPageRow clickable";
+        row.classList.toggle("active", item.key === catalog.playPage?.key);
+        row.innerHTML = `<div class="playPagePreview">${item.preview ? `<img src="playPreview?plugin=${encodeURIComponent(item.plugin)}&id=${encodeURIComponent(item.id)}">` : icon("F00B")}</div><div class="playPageText"><span>${escapeText(item.name)}</span><small>${escapeText(item.pluginName)}</small>${item.description ? `<p>${escapeText(item.description)}</p>` : ""}</div>${icon("EB7B")}`;
+        row.onclick = async () => {
+            list.querySelectorAll(".playPageRow").forEach(other => other.classList.toggle("active", other === row));
+            await setConfig("play.page", item.key);
+            refreshCatalog();
+        };
+        list.append(row);
+    });
+    if (!catalog.playPages.length) list.innerHTML = emptyState();
+    content.append(list);
+    dialogFooter(id, content);
+    su5.dialog.show(id);
 };
 const showPluginPermissions = async manifest => {
     const permissions = await run("pluginPermissions", { plugin: manifest.id });
@@ -1157,74 +1289,69 @@ const showPluginPermissions = async manifest => {
     su5.dialog.show(id);
 };
 
-const renderQueue = () => {
-    const tracks = player.Queue || [];
-    queueCount.textContent = `${tracks.length} 首`;
-    queueTracks.replaceChildren();
-    if (!tracks.length) { queueTracks.innerHTML = emptyState(); return; }
-    tracks.forEach((track, index) => {
-        const row = document.createElement("div");
-        row.className = "queueRow";
-        row.dataset.index = index;
-        row.classList.toggle("current", index === player.Index);
-        row.innerHTML = `<img loading="lazy" src="${coverUrl(track)}"><div><p>${escapeText(track.title)}</p><small>${escapeText(track.artist)}</small></div><button class="iconButton" title="移出队列">×</button>`;
-        updateArtist(row.querySelector("small"), track.artist);
-        row.onclick = event => { if (!event.target.closest("button")) run("playIndex", { index }); };
-        row.onpointerdown = event => dragOnMove(event, () => startDragSort({
-            event, element: row, index, count: tracks.length, scroller: queueTracks, step: 80,
-            items: () => [...queueTracks.querySelectorAll(".queueRow")].map(node => [node, Number(node.dataset.index)]),
-            commit: (from, to) => {
-                moveInList(player.Queue, from, to);
-                player.Index = player.Index === from ? to : player.Index > from && player.Index <= to ? player.Index - 1 : player.Index < from && player.Index >= to ? player.Index + 1 : player.Index;
-                renderQueue();
-                run("moveQueue", { index: from, to });
-            }
-        }));
-        row.querySelector("button").onclick = () => run("removeQueue", { index });
-        row.oncontextmenu = event => { event.preventDefault(); showTrackContext([track], event.clientX, event.clientY, "queue"); };
-        queueTracks.append(row);
-    });
-    queueTracks.onscroll = songInfo.queue;
-    songInfo.queue();
-};
-let queuePanelTimer;
 const setPlaySide = (showQueue, showLyrics) => {
-    clearTimeout(queuePanelTimer);
-    if (showQueue) { queuePanel.hidden = false; queuePanel.getBoundingClientRect(); }
-    document.body.classList.toggle("hideList", !showQueue);
-    document.body.classList.toggle("hideLyrics", !showLyrics);
-    largeQueueButton.classList.toggle("active", showQueue);
-    lyricsButton.classList.toggle("active", showLyrics);
-    if (!showQueue) queuePanelTimer = setTimeout(() => queuePanel.hidden = document.body.classList.contains("hideList"), 300);
-    if (showQueue) {
-        renderQueue();
-        queueTracks.querySelector(".current")?.scrollIntoView({ block: "center" });
-    }
-    if (showLyrics) updateLyrics(true);
+    playSide = showQueue ? "queue" : showLyrics ? "lyrics" : "";
+    if (externalShown) sendPlayView({ value: true, text: playSide });
 };
-const openQueue = () => { openPlayPage(true); setPlaySide(document.body.classList.contains("hideList"), false); };
-let playPageTimer;
-let playOpeningTimer;
+// The play page covers the whole window. Menus, notices and dialogs are windows above it; all that is cut
+// out of it are the window buttons, for a page that leaves them to the host.
+const layoutPlayView = () => {
+    if (!externalShown) return;
+    requestAnimationFrame(layoutPlayView);
+    const value = { left: 0, top: 0, right: 0, bottom: 0, visible: true, holes: catalog.playPage?.windowButtons ? [] : [...document.querySelectorAll(".titleActions, #connectionBanner")].map(elementBox).filter(rect => rect[2] > 0 && rect[3] > 0) };
+    const signature = JSON.stringify(value);
+    if (signature === playLayoutSignature) return;
+    playLayoutSignature = signature;
+    api("playLayout", { value }).catch(() => {});
+};
+// A page that leaves the window buttons to the host names the colour they are drawn on.
+const applyPlayTitle = () => {
+    const shown = externalShown && catalog.playPage;
+    document.body.classList.toggle("playerExternal", !!shown);
+    document.body.classList.toggle("playerHostButtons", !!shown && !catalog.playPage.windowButtons);
+    document.body.classList.toggle("playerExternalDark", !!shown && !!catalog.playPage.dark);
+    if (shown) simCss(document.body).setProperty("--playTitleColor", /^#[0-9a-f]{6}$/i.test(catalog.playPage.background) ? catalog.playPage.background : "#ffffff");
+    collapseButton.hidden = !shown || !!catalog.playPage.windowButtons;
+};
+// What only this page can do for the play page: closing it, the song menus, the player's dialogs, the keys.
+const handlePlayRequest = request => {
+    if (request.kind === "menu") { handleMenuEvent(request); return; }
+    if (request.kind === "lyricsShown") { lyricsShown = !!request.value; return; }
+    if (!externalShown) return;
+    if (request.kind === "close") openPlayPage(false);
+    if (request.kind === "songMenu") {
+        const track = request.scene === "queue" ? player.Queue[request.index] : player.Current;
+        showTrackContext(track ? [track] : [], request.x, request.y, request.scene === "queue" ? "queue" : "play");
+    }
+    if (request.kind === "dialog") ({ equalizer: showEqualizer, sleep: showSleepTimer, speed: showSpeedDialog })[request.name]?.();
+    if (request.kind === "titleBar" && catalog.playPage) { Object.assign(catalog.playPage, { background: request.background, dark: request.dark }); applyPlayTitle(); }
+    // A key pressed in the play page is handled here as if it had been pressed in this page.
+    if (request.kind === "key" && typeof request.event?.key === "string") document.body.dispatchEvent(new KeyboardEvent("keydown", { key: request.event.key, ctrlKey: !!request.event.ctrlKey, altKey: !!request.event.altKey, metaKey: !!request.event.metaKey, shiftKey: !!request.event.shiftKey, repeat: !!request.event.repeat, bubbles: true, cancelable: true }));
+};
+const waitPlayRequests = async () => {
+    if (playWaiting) return;
+    playWaiting = true;
+    for (;;) (await api("playWait").catch(() => new Promise(resolve => setTimeout(resolve, 1000))) || []).forEach(handlePlayRequest);
+};
+// The latest state wins; the answer says whether the page is still there.
+const sendPlayView = queueValue(async value => { externalLive = await api("playView", value).catch(() => false); });
+const setExternalShown = shown => {
+    externalShown = shown;
+    externalKey = shown ? catalog.playPage.key : "";
+    playLayoutSignature = "";
+    applyPlayTitle();
+    if (shown) layoutPlayView();
+};
+const closeExternalPlay = () => { setExternalShown(false); sendPlayView({ value: false, text: "" }); run("playPage", { value: false }); };
+const playIsOpen = () => externalShown;
 const openPlayPage = async open => {
     if (open && !player.Current) return;
-    if (document.body.classList.contains("playerShown") === open) return;
-    clearTimeout(playPageTimer);
-    clearTimeout(playOpeningTimer);
-    // While the page slides in, its own animations and transitions rest so the slide stays smooth,
-    // and the lyrics and queue are already at the current position instead of scrolling to it.
-    document.body.classList.toggle("playerOpening", open);
-    // A finished song-change fade must not replay once the page has opened.
-    if (open) [largeCover, largeTitle.parentElement, lyricsView].forEach(element => element.classList.remove("trackChanging"));
-    if (open) {
-        playPage.hidden = false;
-        updateLyrics(true);
-        queueTracks.querySelector(".current")?.scrollIntoView({ block: "center" });
-        playPage.getBoundingClientRect();
-        playOpeningTimer = setTimeout(() => document.body.classList.remove("playerOpening"), 300);
-    }
-    document.body.classList.toggle("playerShown", open);
-    if (!open) playPageTimer = setTimeout(() => playPage.hidden = !document.body.classList.contains("playerShown"), 300);
-    collapseButton.hidden = !open;
+    if (externalShown === open) return;
+    if (open && !catalog.playPage) { showAlert("没有可用的播放页，请在「扩展」中启用提供播放页的扩展。"); return; }
+    setExternalShown(open);
+    await sendPlayView({ value: open, text: playSide });
+    // The page went away between two catalog reads: the next one names the page that serves now.
+    if (open && externalShown && !externalLive) { setExternalShown(false); catalogSignature = ""; await refreshCatalog(); return; }
     await run("playPage", { value: open });
 };
 const updatePlayer = snapshot => {
@@ -1238,40 +1365,34 @@ const updatePlayer = snapshot => {
     document.body.classList.toggle("hasCurrent", !!player.Current);
     document.body.classList.toggle("playing", player.Playing);
     document.body.classList.toggle("musicLoading", !!player.Loading);
-    if (!player.Current && !playPage.hidden) openPlayPage(false);
+    if (!player.Current && externalShown) openPlayPage(false);
+    // The catalog is read again at once when the extension page in use is not the one it names.
+    if ((snapshot.playView || "") !== (catalog.playPage?.key || "")) catalogPollAt = 0;
     const key = player.Current ? `${trackKey(player.Current)}:${player.Current.infoRevision || 0}` : "";
     if (lastCurrentKey !== key) {
         const nextSongKey = player.Current ? trackKey(player.Current) : "";
         const changed = displayedSongKey && nextSongKey && displayedSongKey !== nextSongKey;
         displayedSongKey = nextSongKey;
         lastCurrentKey = key;
-        resetLyricsScroll();
-        activeLyric = -1;
         updateTrackDisplay(player.Current, changed);
         updateBackdrop();
         updateRowStates();
     }
     const modes = ["列表循环", "单曲循环", "随机播放"];
     const modeIcon = icon(["F072", "F075", "F124"][player.Mode || 0]);
-    if (modeButton.innerHTML !== modeIcon) modeButton.innerHTML = largeModeButton.innerHTML = modeIcon;
-    modeButton.title = largeModeButton.title = modes[player.Mode || 0];
+    if (modeButton.innerHTML !== modeIcon) modeButton.innerHTML = modeIcon;
+    modeButton.title = modes[player.Mode || 0];
     const duration = Math.max(1, player.Dur);
     if (Number(seekBar.progress.max) !== duration) seekBar.progress.max = duration;
-    if (Number(largeSeekBar.progress.max) !== duration) largeSeekBar.progress.max = duration;
-    seekBar.progress.value = largeSeekBar.progress.value = player.Pos;
-    volumeBar.progress.value = largeVolumeBar.progress.value = player.Volume;
+    seekBar.progress.value = player.Pos;
+    volumeBar.progress.value = player.Volume;
     updateVolumeIcons();
     speed = player.Speed || 1;
-    speedButton.textContent = `${speed} 倍`;
     timeLabel.textContent = `${formatTime(player.Pos)} / ${formatTime(player.Dur)}`;
-    positionLabel.textContent = formatTime(player.Pos);
-    durationLabel.textContent = formatTime(player.Dur);
     desktopButton.classList.toggle("active", snapshot.deskVisible);
-    if (!trackDisplayPending) renderLyrics();
     const nextQueueSignature = JSON.stringify([player.Queue, player.Index]);
     if (queueSignature !== nextQueueSignature && !dragActive) {
         queueSignature = nextQueueSignature;
-        if (!queuePanel.hidden) renderQueue();
         updateRowStates();
     }
     if (page.kind === "downloads") {
@@ -1281,16 +1402,10 @@ const updatePlayer = snapshot => {
     const sleep = sleepState = snapshot.sleep;
     const until = new Date(sleep.Until).getTime();
     const sleepActive = sleep.WaitTrackEnd || until > Date.now();
-    // 2024: while a timer runs, the play page's menu button shows the countdown, then "+time" once it waits for the track to end.
-    sleepWaitSince = sleep.WaitTrackEnd ? sleepWaitSince || Date.now() : 0;
     document.body.classList.toggle("sleepMode", sleepActive);
-    const moreLabel = !sleepActive ? icon("EF77") : sleep.WaitTrackEnd ? `+${formatTime((Date.now() - sleepWaitSince) / 1000)}` : formatTime((until - Date.now()) / 1000);
-    if (trackMoreButton.innerHTML !== moreLabel) trackMoreButton.innerHTML = moreLabel;
-    sleepButton.textContent = sleepActive ? sleep.WaitTrackEnd ? "曲目结束后暂停 · 取消" : `剩余 ${formatTime((until - Date.now()) / 1000)} · 取消` : "睡眠定时";
-    sleepButton.onclick = sleepActive ? () => run("cancelSleep") : showSleepTimer;
+    const sleepAction = sleepActive ? () => run("cancelSleep") : showSleepTimer;
     const timerSetting = mainContent.querySelector('[data-setting-key="sleepTimer"] .settingControl button');
-    if (timerSetting) { timerSetting.textContent = sleepActive ? "取消定时" : "开启定时"; timerSetting.onclick = sleepButton.onclick; }
-    (snapshot.toasts || []).forEach(message => su5.toast(message));
+    if (timerSetting) { timerSetting.textContent = sleepActive ? "取消定时" : "开启定时"; timerSetting.onclick = sleepAction; }
     (snapshot.alerts || []).forEach(showAlert);
     (snapshot.musicInvalidations || []).forEach(id => songInfo.invalidate(id));
     // An extension asked for one of its own sidebar entries to be shown.
@@ -1309,77 +1424,28 @@ const updatePlayer = snapshot => {
         shownPrompts.delete(prompt.id);
     });
 };
-const resetLyricsScroll = () => {
-    clearTimeout(lyricsManualTimer);
-    lyricsView.classList.remove("manualScroll");
-};
-const renderLyrics = () => {
-    const signature = JSON.stringify(player.Lyrics);
-    if (signature !== lyricsSignature) {
-        lyricsSignature = signature;
-        resetLyricsScroll();
-        lyricsView.innerHTML = player.Lyrics.length ? player.Lyrics.map((line, index) => `<div class="lyricLine" data-lyric="${index}">${escapeText(line.Text)}${line.Trans ? `<span>${escapeText(line.Trans)}</span>` : ""}</div>`).join("") : `<div class="emptyLyrics">暂无歌词</div>`;
-        lyricsView.querySelectorAll(".lyricLine").forEach((node, index) => node.onclick = async () => { await run("seek", { number: player.Lyrics[index].Time + .1 }); updateLyrics(true); });
-        activeLyric = -1;
-    }
-    if (!playPage.hidden) updateLyrics();
-};
-const updateLyrics = (forceScroll = false) => {
-    if (trackDisplayPending) return;
-    if (forceScroll) resetLyricsScroll();
-    let index = -1;
-    player.Lyrics.forEach((line, i) => { if (line.Time <= player.Pos) index = i; });
-    if (index === activeLyric && !forceScroll) return;
-    activeLyric = index;
-    const lines = lyricsView.querySelectorAll(".lyricLine");
-    lines.forEach((line, i) => {
-        line.classList.toggle("active", i === index);
-        const distance = Math.abs(i - index);
-        line.dataset.blur = index < 0 || !distance ? 0 : Math.min(distance + 1, 5);
-    });
-    if (index >= 0 && !lyricsView.classList.contains("manualScroll") && !playPage.hidden && !document.body.classList.contains("hideLyrics")) {
-        const line = lines[index];
-        lyricsView.scrollTo({ top: line.offsetTop - lyricsView.offsetTop - lyricsView.clientHeight / 2 + line.clientHeight / 2, behavior: document.body.classList.contains("playerOpening") ? "auto" : "smooth" });
-    }
-};
-lyricsView.addEventListener("wheel", event => {
-    if (!event.deltaY || !largeVolumeBar.hidden || !player.Lyrics.length) return;
-    clearTimeout(lyricsManualTimer);
-    // Stop an in-flight follow animation before the browser applies the user's wheel delta.
-    if (!lyricsView.classList.contains("manualScroll")) lyricsView.scrollTo({ top: lyricsView.scrollTop, behavior: "auto" });
-    lyricsView.classList.add("manualScroll");
-    lyricsManualTimer = setTimeout(() => updateLyrics(true), 3000);
-}, { passive: true });
-
 minimizeButton.onclick = () => run("window", { text: "minimize" });
 maximizeButton.onclick = () => run("window", { text: "maximize" });
 closeButton.onclick = () => run("window", { text: "close" });
 desktopButton.onclick = () => run("desktopLyrics");
-previousButton.onclick = largePreviousButton.onclick = () => run("previous");
-nextButton.onclick = largeNextButton.onclick = () => run("next");
-toggleButton.onclick = largeToggleButton.onclick = () => run("toggle");
-modeButton.onclick = largeModeButton.onclick = () => run("mode");
-largeQueueButton.onclick = openQueue;
+previousButton.onclick = () => run("previous");
+nextButton.onclick = () => run("next");
+toggleButton.onclick = () => run("toggle");
+modeButton.onclick = () => run("mode");
 queueButton.onclick = () => { openPlayPage(true); setPlaySide(true, false); };
-hideQueueButton.onclick = () => setPlaySide(false, lyricsShown);
-clearQueueButton.onclick = async () => { if (await su5.dialog.confirm("清空播放队列？")) await run("clearQueue"); };
 miniCoverButton.onclick = () => { setPlaySide(false, lyricsShown); openPlayPage(true); };
 collapseButton.onclick = () => openPlayPage(false);
-trackMoreButton.onclick = event => showTrackContext(player.Current ? [player.Current] : [], event.clientX, event.clientY, "play");
-largeCover.oncontextmenu = event => { event.preventDefault(); showTrackContext(player.Current ? [player.Current] : [], event.clientX, event.clientY, "play"); };
-eqButton.onclick = showEqualizer;
-speedButton.onclick = event => showContext(speedMenuItem().children, event.clientX, event.clientY);
 muteButton.onclick = () => { if (player.Volume > 0) { previousVolume = player.Volume; run("volume", { number: 0 }); } else run("volume", { number: previousVolume }); };
-seekBar.progress.onchange = largeSeekBar.progress.onchange = number => run("seek", { number });
+seekBar.progress.onchange = number => run("seek", { number });
 const updateVolumeIcons = () => {
     const glyph = icon(player.Volume <= 0 ? "F29E" : "F2A2");
-    if (muteButton.innerHTML !== glyph) muteButton.innerHTML = largeVolumeButton.innerHTML = glyph;
+    if (muteButton.innerHTML !== glyph) muteButton.innerHTML = glyph;
     muteButton.title = player.Volume <= 0 ? "取消静音" : "静音";
 };
 let trackLeaveAt = 0;
 const updateTrackDisplay = async (track, changed) => {
     const generation = ++trackDisplayGeneration;
-    const elements = [playerBar.querySelector(".info"), largeCover, largeTitle.parentElement, lyricsView];
+    const elements = [playerBar.querySelector(".info")];
     // A refresh of the same song (new index revision) joins a fade-out still in flight but
     // never starts another transition: one song change plays exactly one animation.
     const leaving = elements.some(element => element.classList.contains("trackLoading"));
@@ -1392,7 +1458,7 @@ const updateTrackDisplay = async (track, changed) => {
         element.classList.remove("trackChanging");
         element.classList.toggle("trackLoading", !!track);
     });
-    const covers = [coverUrl(track), coverUrl(track, "play")];
+    const covers = [coverUrl(track)];
     if (track) {
         trackCoverImages = covers.map(() => new Image());
         await Promise.all([
@@ -1411,15 +1477,11 @@ const updateTrackDisplay = async (track, changed) => {
         if (generation !== trackDisplayGeneration) return;
     }
     miniCover.src = covers[0];
-    largeCover.src = covers[1];
-    await Promise.all([miniCover.decode(), largeCover.decode()].map(ready => ready.catch(() => {})));
+    await miniCover.decode().catch(() => {});
     if (generation !== trackDisplayGeneration) return;
-    miniTitle.textContent = largeTitle.textContent = track?.title || "未播放";
+    miniTitle.textContent = track?.title || "未播放";
     updateArtist(miniArtist, track?.artist);
-    updateArtist(largeArtist, track?.artist);
-    updateCoverTheme();
     trackDisplayPending = false;
-    renderLyrics();
     elements.forEach(element => element.classList.remove("trackLoading"));
     if (track && changed) {
         void playerBar.offsetWidth;
@@ -1429,28 +1491,18 @@ const updateTrackDisplay = async (track, changed) => {
 const sendVolume = queueValue(number => run("volume", { number }));
 const setVolume = number => {
     player.Volume = Math.max(0, Math.min(1, number));
-    volumeBar.progress.value = largeVolumeBar.progress.value = player.Volume;
+    volumeBar.progress.value = player.Volume;
     updateVolumeIcons();
     return sendVolume(player.Volume);
 };
 volumeBar.progress.onchange = volumeBar.progress.ondrag = setVolume;
-largeVolumeBar.progress.onchange = largeVolumeBar.progress.ondrag = setVolume;
-const showVolume = open => { largeVolumeBar.hidden = !open; };
-largeVolumeButton.onclick = () => showVolume(largeVolumeBar.hidden);
 const volumeWheel = event => {
     if (!event.deltaY) return;
     event.preventDefault();
     setVolume(player.Volume + (event.deltaY < 0 ? .05 : -.05));
 };
 document.querySelector(".volBtnBottom").addEventListener("wheel", volumeWheel, { passive: false });
-document.addEventListener("wheel", event => {
-    if (!document.body.classList.contains("playerShown") || document.querySelector("dialog[open]")) return;
-    if (event.target.closest(".largeVolumeControl")) showVolume(true);
-    if (!largeVolumeBar.hidden) volumeWheel(event);
-}, { passive: false });
-document.addEventListener("pointerdown", event => { if (!event.target.closest(".largeVolumeControl")) showVolume(false); });
-window.addEventListener("blur", () => showVolume(false));
-lyricsButton.onclick = () => { lyricsShown = document.body.classList.contains("hideLyrics"); setPlaySide(false, lyricsShown); run("lyricsShown", { value: lyricsShown }); };
+
 
 sideResizer.onpointerdown = event => {
     sideResizer.setPointerCapture(event.pointerId);
@@ -1468,7 +1520,7 @@ document.addEventListener("keydown", event => {
         return;
     }
     if (event.ctrlKey && ["i", "r"].includes(key)) { event.preventDefault(); return; }
-    if (event.target.closest("dialog[open],textarea,select,[contenteditable]") || document.querySelector("dialog[open]")) return;
+    if (event.target.closest("textarea,select,[contenteditable]") || dialogOpen()) return;
     const input = event.target.closest("input");
     if (input && !(input.type === "range" && input.closest("#playerBar,#playPage"))) return;
     if (event.key === " ") { event.preventDefault(); if (!event.repeat) run("toggle"); }
@@ -1485,8 +1537,8 @@ document.addEventListener("keydown", event => {
     }
     if (event.ctrlKey && event.key.toLowerCase() === "f") { event.preventDefault(); navigate({ kind: "search" }); }
     if (event.ctrlKey && event.key.toLowerCase() === "o") { event.preventDefault(); run("openFiles"); }
-    if (event.key === "Escape") { setPlaySide(false, lyricsShown); showVolume(false); openPlayPage(false); if (document.fullscreenElement) document.exitFullscreen(); }
-    if (event.key === "F11" && document.body.classList.contains("playerShown")) { event.preventDefault(); if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }
+    if (event.key === "Escape") { setPlaySide(false, lyricsShown); openPlayPage(false); if (document.fullscreenElement) document.exitFullscreen(); }
+    if (event.key === "F11" && playIsOpen()) { event.preventDefault(); if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }
 }, true);
 
 let catalogPollAt = 0;
@@ -1505,6 +1557,7 @@ const start = async () => {
     lyricsShown = catalog.lyricsShown;
     setPlaySide(false, lyricsShown);
     await navigate({ kind: "home" });
+    waitPlayRequests();
     poll();
 };
 window.simInitialReady = start().catch(() => { mainContent.innerHTML = emptyState(); connectionBanner.hidden = false; setTimeout(start, 1500); });

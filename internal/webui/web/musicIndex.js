@@ -3,7 +3,6 @@ const songInfo = (() => {
     const pending = new Map();
     const epochs = new Map();
     let tableTimer;
-    let queueTimer;
     const apply = fresh => {
         fresh.forEach(track => {
             const key = trackKey(track);
@@ -24,14 +23,6 @@ const songInfo = (() => {
             cells[3].textContent = track.album;
             cells[4].textContent = formatTime(track.duration);
             highlightRow(row, track);
-        });
-        queueTracks.querySelectorAll(".queueRow").forEach(row => {
-            const track = player.Queue[Number(row.dataset.index)];
-            if (!track) return;
-            row.querySelector("p").textContent = track.title;
-            updateArtist(row.querySelector("small"), track.artist);
-            const image = row.querySelector("img");
-            if (image.getAttribute("src") !== coverUrl(track)) image.src = coverUrl(track);
         });
         const header = mainContent.querySelector(".playlistHeader > img");
         if (header && viewTracks[0] && header.getAttribute("src") !== coverUrl(viewTracks[0])) header.src = coverUrl(viewTracks[0]);
@@ -54,26 +45,15 @@ const songInfo = (() => {
         } catch (error) { showAlert(error.message); }
         finally { missing.forEach(track => { if (pending.get(trackKey(track)) === request) pending.delete(trackKey(track)); }); }
     };
-    const queue = () => {
-        clearTimeout(queueTimer);
-        queueTimer = setTimeout(() => {
-            if (queuePanel.hidden) return;
-            const bounds = queueTracks.getBoundingClientRect();
-            const visible = [...queueTracks.querySelectorAll(".queueRow")].filter(row => { const r = row.getBoundingClientRect(); return r.bottom > bounds.top - 400 && r.top < bounds.bottom + 400; }).map(row => player.Queue[Number(row.dataset.index)]);
-            fetchTracks(visible);
-        }, 90);
-    };
     // Songs whose records were dropped are read again where they are shown: the rows of the list
-    // on screen and of the play queue, without leaving the page.
+    // on screen, without leaving the page.
     const refreshShown = () => {
         const rows = window.trackList ? [...trackList.querySelectorAll(".trackRow")].map(row => tableTracks[Number(row.dataset.row)]).filter(Boolean) : [];
         if (rows.length) { clearTimeout(tableTimer); tableTimer = setTimeout(() => fetchTracks(rows), 90); }
-        queue();
     };
     return {
         hydrate: tracks => tracks.forEach(track => { const cached = records.get(trackKey(track)); if (cached && (cached.infoRevision || 0) >= (track.infoRevision || 0)) Object.assign(track, cached); }),
         table: tracks => { clearTimeout(tableTimer); tableTimer = setTimeout(() => fetchTracks(tracks), 90); },
-        queue,
         clear: async (tracks, scene) => {
             tracks.forEach(track => { const key = trackKey(track); records.delete(key); pending.delete(key); epochs.set(key, (epochs.get(key) || 0) + 1); });
             const fresh = await run("clearMusicInfo", { tracks, scene });

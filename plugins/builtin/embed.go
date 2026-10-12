@@ -11,18 +11,32 @@ import (
 	"path/filepath"
 )
 
-//go:embed local
+//go:embed local playPage
 var files embed.FS
 
-// Local 返回内置「本地音乐」插件的文件系统。
-func Local() fs.FS {
-	sub, _ := fs.Sub(files, "local")
+// Names lists the bundled extensions in loading order: the local music source and the play page.
+var Names = []string{"local", "playPage"}
+
+// Bundle returns the files of one bundled extension.
+func Bundle(name string) fs.FS {
+	sub, _ := fs.Sub(files, name)
 	return sub
 }
 
-// DeployLocal updates only unmodified bundle files, retaining user edits across upgrades.
+// Local 返回内置「本地音乐」插件的文件系统。
+func Local() fs.FS { return Bundle("local") }
+
+// DeployLocal deploys the local music source.
 func DeployLocal(dataDir string) (string, error) {
-	dir := filepath.Join(dataDir, "plugins", "local")
+	dir, err := Deploy(dataDir, "local")
+	// 旧版本地扩展自行保存的索引；索引缓存现由主程序统一管理。
+	_ = os.Remove(filepath.Join(dataDir, "plugin-data", "local", "index.json"))
+	return dir, err
+}
+
+// Deploy updates only unmodified bundle files, retaining user edits across upgrades.
+func Deploy(dataDir, name string) (string, error) {
+	dir := filepath.Join(dataDir, "plugins", name)
 	stamp := filepath.Join(dir, ".bundle-hashes.json")
 	previous := map[string]string{}
 	if b, err := os.ReadFile(stamp); err == nil {
@@ -30,14 +44,14 @@ func DeployLocal(dataDir string) (string, error) {
 	}
 	next := map[string]string{}
 	digest := func(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
-	err := fs.WalkDir(Local(), ".", func(path string, entry fs.DirEntry, err error) error {
+	err := fs.WalkDir(Bundle(name), ".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if entry.IsDir() {
 			return os.MkdirAll(filepath.Join(dir, path), 0o755)
 		}
-		bundled, err := fs.ReadFile(Local(), path)
+		bundled, err := fs.ReadFile(Bundle(name), path)
 		if err != nil {
 			return err
 		}
@@ -56,8 +70,6 @@ func DeployLocal(dataDir string) (string, error) {
 	if err != nil {
 		return dir, err
 	}
-	// 旧版本地扩展自行保存的索引；索引缓存现由主程序统一管理。
-	_ = os.Remove(filepath.Join(dataDir, "plugin-data", "local", "index.json"))
 	b, _ := json.MarshalIndent(next, "", "  ")
 	return dir, os.WriteFile(stamp, b, 0o644)
 }

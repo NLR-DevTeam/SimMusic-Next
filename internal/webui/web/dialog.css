@@ -1,0 +1,15 @@
+/* A dialog in a window of its own: the box is the window. SimUI's overlay, its centring and its opening
+   animation do not apply here; the window is modal and animated by the system. */
+.dialogWindow .modalContainer { position: static; inset: auto; display: block; width: auto; height: auto; margin: 0; background: none; opacity: 1; pointer-events: auto; transition: none; }
+.dialogWindow .modalContainer > div { position: static; width: 100%; max-width: none; margin: 0; border: 0; border-radius: 0; transform: none; transition: none; }
+.dialogWindow .modalContainer > div > .modalContent { max-height: calc(var(--dialogMax, 600px) - 80px); }
+/* The window is moved by the dialog's header. */
+.dialogWindow .modalHeader { -webkit-app-region: drag; }
+.dialogWindow .modalHeader button { -webkit-app-region: no-drag; }
+/* The window's close button, in its top right corner; the header keeps clear of it. */
+#dialogClose { position: fixed; top: 0; right: 0; z-index: 10; -webkit-app-region: no-drag; }
+.dialogWindow .modalContainer > div > .modalHeader { padding-right: 56px; }
+/* The button row stays at the bottom of the dialog: what is above it scrolls beneath it. The row takes over
+   the content's bottom padding and reaches its sides, so nothing shows around it. */
+.dialogWindow .modalContainer > div > .modalContent:has(> .buttons:last-child) { padding-bottom: 0; }
+.dialogWindow .modalContainer > div > .modalContent > .buttons:last-child { position: sticky; bottom: 0; z-index: 5; margin: 0 -24px; padding: 22px 24px; background: #F9F9FB; }

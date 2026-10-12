@@ -1,0 +1,135 @@
+/* SimMusic 内置播放页。布局与控件状态沿用原主界面播放页的规则；控件来自宿主提供的 SimUI。 */
+@font-face { font-family: "windowsicon"; src: url("/.sim/assets/fonts/codicon.ttf"); }
+html { --SimsvMainColor: #1e9fff; --SimsvSubColor: #daefff; --SimAPTheme: #1e9fff; color: black; font-size: 16px; background: white; }
+body { height: 100vh; overflow: hidden; }
+button { margin: 0; cursor: default; font-weight: 400; }
+b { font-weight: 400; }
+p { margin: 0; }
+/* 窗口按钮由页面自己绘制，位置、尺寸与主界面的一致；其余顶部区域用于拖动窗口。 */
+#titleBar { position: fixed; inset: 0 0 auto; width: 100%; height: 35px; display: flex; justify-content: flex-end; z-index: 100; -webkit-app-region: drag; }
+.darkPlayer #titleBar { color: #fffc; }
+.iconButton { background: transparent; color: inherit; padding: 0; margin: 0; display: inline-flex; align-items: center; justify-content: center; font-family: inherit; font-weight: 400; cursor: default; }
+.titleActions { display: flex; height: 35px; -webkit-app-region: no-drag; }
+.titleButton { height: 35px; width: 46px; display: flex; align-items: center; justify-content: center; padding: 0 0 1px; background: transparent; color: inherit; border-radius: 0; transition: background .2s, opacity .2s, color .2s; }
+.windowsIcon { font-family: "windowsicon"; }
+.titleButton:hover { background: #00000012; filter: none; }
+.titleButton:active { background: #00000033; opacity: .8; }
+.titleButton.closeButton:hover { background: #e81123; color: white; }
+#playPage { position: fixed; inset: 0; background: white; overflow: hidden; --SimsvMainColor: var(--SimAPTheme); }
+.playerContainer { position: absolute; inset: 0; margin: 20px max(calc(50vw - 500px), 90px); transition: transform .2s; }
+body:not(.hideLyrics.hideList) .playerContainer { transform: translateX(-25px); }
+.controls { position: absolute; inset: 0; margin: auto 0; width: 350px; height: fit-content; display: flex; flex-direction: column; z-index: 5; transition: margin .3s, transform .3s; }
+.hideLyrics.hideList .controls { margin: auto calc(50% - 175px); transform: scale(1.05); }
+#largeCover { width: 360px; height: 360px; margin: -5px; object-fit: cover; border-radius: 10px; background: white; box-shadow: 0 20px 25px -5px #00000019, 0 8px 10px -6px #00000019; transition: transform .4s cubic-bezier(.3,.7,0,1.8); }
+.albumScale:not(.playing) #largeCover { transform: scale(.95); }
+.infoBar { display: flex; align-items: center; margin: 30px 0 10px; }
+.musicInfo { width: calc(100% - 30px); }
+.musicInfo b, .musicInfo div { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.musicInfo b { font-size: 1.3em; }
+.musicInfo div { font-size: .9em; opacity: .8; }
+.progressControl { display: flex; align-items: center; margin: 10px 0; }
+.progressControl span { width: 55px; font-size: .85em; opacity: .8; }
+.progressControl span:last-child { text-align: right; }
+.controls .buttons { display: flex; justify-content: center; align-items: center; margin-top: 5px; }
+.lyrics, .list { position: absolute; left: 410px; top: 0; width: calc(100% - 410px); height: 100%; transform-origin: left center; transition: transform .3s, opacity .3s; -webkit-mask-image: linear-gradient(transparent, #0009 15%, black 25%, black 75%, #0009 85%, transparent); }
+.hideLyrics .lyrics, .hideList .list { transform: scale(.6); opacity: 0; pointer-events: none; }
+.lyricsScroll { --align: left; --inactiveZoom: .8; --lineSpace: .5em; --lrcTranslation: .8em; overflow-y: auto; text-align: var(--align); }
+.lyricsScroll::before, .lyricsScroll::after { content: ""; display: block; height: 50%; }
+.lyricLine { color: var(--normalColor); font-size: var(--lyricSize, 36px); margin: calc(var(--lineSpace) * var(--inactiveZoom)) .2em; transform: scale(var(--inactiveZoom)); transform-origin: var(--align) center; transition: color .3s, transform .3s, margin .3s, filter 0s; }
+.lyricLine.active { color: var(--activeColor); transform: scale(1); margin: var(--lineSpace) .2em; transition: color .3s, transform .3s, margin .3s, filter .3s; }
+.lyricLine:not(.active):hover { color: var(--hoverColor); }
+.lyricLine span { display: block; font-size: var(--lrcTranslation); }
+.darkPlayer #playPage { background: black; color: #ffffffe6; }
+.darkPlayer .controls .iconButton:hover { background: #ffffff0d; }
+.threeEffect .controls { transform: perspective(900px) rotateY(10deg); }
+.threeEffect .lyrics, .threeEffect .list { transform: perspective(900px) rotateY(-12.5deg); }
+.darkPlayer #playPage { --SimAPTheme: #fffc!important; }
+.darkPlayer #playPage .progress .outerBar { background: #ffffff19; }
+.controls .buttons > button.active { color: var(--SimAPTheme); opacity: .7; }
+.largeVolumeControl > button:hover { color: var(--SimAPTheme); }
+/* 2024 SimAP .infoBar i: hover and press feedback, widening into the sleep countdown. */
+.controls .infoBar > button { flex-shrink: 0; width: 30px; height: 30px; border-radius: 15px; background: #00000006; color: #0009; font-size: 1.1em; transition: all .2s, font-size 0s; }
+.controls .infoBar > button i { background: transparent; color: inherit; }
+.controls .infoBar > button:hover { background: #0000000d; color: #000c; filter: none; }
+.controls .infoBar > button:active { background: #0000000d; color: #000c; transform: scale(.95); filter: none; }
+.sleepMode .controls .infoBar > button { width: 70px; font-size: .9em; font-variant-numeric: tabular-nums; }
+.darkPlayer .controls .infoBar > button { background: #ffffff06; color: #fff9; }
+.darkPlayer .controls .infoBar > button:hover, .darkPlayer .controls .infoBar > button:active { background: #ffffff0d; color: #fffc; }
+.controls .buttons > button, .largeVolumeControl > button { width: 50px; height: 50px; position: relative; font-size: 1.5em; transition: all .3s; opacity: .3; border-radius: 50%; }
+.controls .buttons > button:hover, .largeVolumeControl > button:hover { background: #0000000d; opacity: .7; filter: none; }
+.controls .buttons > button:active { transform: scale(.95); }
+.controls .buttons > button.larger i { font-size: 1.15em; }
+.controls .buttons > button.play { width: 60px; height: 60px; font-size: 2.1em; opacity: 1; }
+.largeVolumeControl { position: relative; }
+#largeVolumeBar { position: absolute; width: 120px; bottom: 58px; left: -35px; background: #fcfcfc; box-shadow: 0 3px 15px #0002; border-radius: 5px; }
+.controls .progressControl .progress { flex: 1; }
+#lyricsView { height: 100%; --normalColor: #0006; --activeColor: var(--SimAPTheme); --hoverColor: #0009; }
+#lyricsView .lyricLine { font-weight: 400; }
+.blurLyrics #lyricsView:not(.manualScroll) .lyricLine[data-blur="2"] { filter: blur(2px); }
+.blurLyrics #lyricsView:not(.manualScroll) .lyricLine[data-blur="3"] { filter: blur(3px); }
+.blurLyrics #lyricsView:not(.manualScroll) .lyricLine[data-blur="4"] { filter: blur(4px); }
+.blurLyrics #lyricsView:not(.manualScroll) .lyricLine[data-blur="5"] { filter: blur(5px); }
+/* A blurred line is readable while the pointer is on it. */
+.blurLyrics #lyricsView:not(.manualScroll) .lyricLine[data-blur]:hover { filter: none; }
+.darkPlayer #lyricsView { --normalColor: #fff3; --activeColor: #fffc; --hoverColor: #fff9; }
+.emptyLyrics { color: #0006; font-size: 1em!important; text-align: center; }
+.darkPlayer .emptyLyrics { color: #fff6; }
+#queueTracks { height: 100%; overflow: auto; }
+#queueTracks::before, #queueTracks::after { content: ""; display: block; height: 50%; }
+.queueRow { display: flex; align-items: center; height: 80px; padding: 0 10px; border-radius: 10px; transition: background .2s; }
+.queueRow:hover { background: #00000006; }
+.queueRow.current { background: #0000000d; }
+.queueRow img { min-width: 60px; width: 60px; height: 60px; margin-right: 10px; border-radius: 5px; object-fit: cover; }
+.queueRow > div { width: calc(100% - 100px); }
+.queueRow p { display: block; font-size: 1.1em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.queueRow small { display: block; font-size: .9em; opacity: .8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.queueRow > button { width: 30px; height: 30px; opacity: .3; font-size: 1em; }
+.queueRow > button:hover { opacity: .8; filter: none; }
+.queueRow.current > button { opacity: 0; pointer-events: none; }
+.list > #queueTracks { padding: 0; display: block; height: 100%; border-radius: 0; background: transparent; }
+.list::before, .list::after { display: none; }
+.coverAtmosphere { position: absolute; inset: 0; opacity: .2; pointer-events: none; transition: background-color .3s; }
+.coverAtmosphere::after { content: ""; position: absolute; inset: 0; background: linear-gradient(135deg, #ffffff19, #ffffff80); }
+.coverAtmosphere div { position: absolute; width: 100%; height: 120%; animation: atmosphereDrift 22s ease-in-out infinite alternate; }
+.coverAtmosphere div:nth-child(1) { left: -15%; top: -20%; }
+.coverAtmosphere div:nth-child(2) { right: -20%; bottom: -30%; animation-delay: -8s; animation-direction: alternate-reverse; }
+.coverAtmosphere div:nth-child(3) { left: 30%; top: 20%; animation-delay: -16s; }
+.staticBackdrop .coverAtmosphere div { animation: none; }
+body:not(.playing) .coverAtmosphere div, body:not(.playerShown) .coverAtmosphere div { animation-play-state: paused; }
+.darkPlayer .coverAtmosphere { opacity: .35; }
+.darkPlayer .coverAtmosphere div { opacity: .5; }
+.darkPlayer.musicLoading #largeSeekBar .outerBar { background-image: linear-gradient(-45deg, #ffffff0d 25%, transparent 0, transparent 50%, #ffffff0d 0, #ffffff0d 75%, transparent 0, transparent); }
+.musicLoading :is(#seekBar, #largeSeekBar) .outerBar { animation: progressLoading 1s linear infinite; background-image: linear-gradient(-45deg, #0000000d 25%, transparent 0, transparent 50%, #0000000d 0, #0000000d 75%, transparent 0, transparent); background-repeat: repeat-x; background-size: 25px 20px; }
+@keyframes progressLoading { to { background-position: 25px 0; } }
+.playGlyph { display: block; width: 1em; height: 1em; fill: currentColor; stroke: currentColor; stroke-linejoin: round; }
+.playGlyph path { stroke-width: 1.6px; transition: d .3s cubic-bezier(.3, .7, 0, 1), stroke-width .3s; }
+.playGlyph path:first-child { d: path("M7 3.6 L13.75 7.8 L13.75 16.2 L7 20.4 Z"); }
+.playGlyph path:last-child { d: path("M13.75 7.8 L20.5 12 L20.5 12 L13.75 16.2 Z"); }
+.playing .playGlyph path { stroke-width: .6px; }
+.playing .playGlyph path:first-child { d: path("M6.8 3.3 L8.2 3.3 L8.2 20.7 L6.8 20.7 Z"); }
+.playing .playGlyph path:last-child { d: path("M16.8 3.3 L18.2 3.3 L18.2 20.7 L16.8 20.7 Z"); }
+@keyframes atmosphereDrift { from { transform: translate(-5%, -5%) rotate(-12deg) scale(1); } to { transform: translate(15%, 12%) rotate(25deg) scale(1.15); } }
+@keyframes trackInfoChange { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes trackContentChange { from { opacity: .15; } to { opacity: 1; } }
+@keyframes trackContentLeave { to { opacity: 0; } }
+.dragGhost { position: fixed; z-index: 160; margin: 0; pointer-events: none; background: #fcfcfc; border-radius: 5px; box-shadow: 0 8px 24px #00000024; opacity: .96; }
+.dragSource { opacity: 0; }
+.dragUp { transform: translateY(calc(-1 * var(--dragStep))); }
+.dragDown { transform: translateY(var(--dragStep)); }
+.emptyState { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 1.2em; color: #0008; }
+.emptyState i { font-size: 65px; opacity: .3; }
+.darkPlayer .emptyState { color: #fff8; }
+.musicInfo.trackChanging { animation: trackInfoChange .32s ease-out; }
+#largeCover.trackChanging, #lyricsView.trackChanging { animation: trackContentChange .36s ease-out; }
+.musicInfo.trackLoading, #largeCover.trackLoading, #lyricsView.trackLoading { animation: trackContentLeave .12s ease-out forwards; }
+.dragGhost.queueRow { background: #f4f4f4; border-radius: 10px; }
+.darkPlayer .dragGhost.queueRow { background: #262626; color: #ffffffe6; }
+.dragSorting .queueRow { transition: transform .15s; }
+/* 页面随窗口滑入期间，自身的过渡与动画静止；封面、标题与歌词直接就位，不再播放切歌动画。 */
+.playerOpening #playPage * { transition: none !important; animation-play-state: paused !important; }
+.playerOpening #playPage :is(.trackChanging, .trackLoading) { animation: none !important; }
+/* 逐字歌词：片段各自成块，空格保留。当前行未唱到的片段半透明，唱过的完全显示，正在唱的按进度从左到右显现。 */
+.lyricWord { display: inline-block; white-space: pre; }
+.lyricLine.active .lyricWord { opacity: .5; transition: opacity .2s; }
+.lyricLine.active .lyricWord.sung { opacity: 1; }
+.lyricLine.active .lyricWord.singing { opacity: 1; transition: none; -webkit-mask-image: linear-gradient(90deg, #000 var(--wordProgress, 0%), #00000080 var(--wordProgress, 0%)); }

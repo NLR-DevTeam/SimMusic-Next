@@ -38,6 +38,7 @@ type Manifest struct {
 	TrackMenus       []model.Action      `json:"trackMenus,omitempty"`
 	Schemes          []SchemeDeclaration `json:"schemes,omitempty"`
 	SchemeExtensions []SchemeDeclaration `json:"schemeExtensions,omitempty"`
+	PlayPages        []PlayPage          `json:"playPages,omitempty"`
 }
 
 var ErrNotImplemented = errors.New("plugin: function not implemented")

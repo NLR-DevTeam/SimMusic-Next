@@ -128,14 +128,20 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	builtinDir, deployErr := builtin.DeployLocal(dir)
-	if deployErr != nil {
-		log.Println("deploy builtin plugin:", deployErr)
-	}
 	a.Plugins.BeginLoading()
-	if err := a.Plugins.AddBuiltinDir(builtinDir); err != nil {
-		log.Println("builtin plugin:", err)
+	for _, name := range builtin.Names {
+		builtinDir, deployErr := builtin.Deploy(dir, name)
+		if name == "local" {
+			builtinDir, deployErr = builtin.DeployLocal(dir)
+		}
+		if deployErr != nil {
+			log.Println("deploy builtin plugin:", deployErr)
+		}
+		if err := a.Plugins.AddBuiltinDir(builtinDir); err != nil {
+			log.Println("builtin plugin:", err)
+		}
 	}
+	a.MigratePlayPageSettings()
 	a.Plugins.LoadUserPlugins()
 	a.RestoreQueue()
 
@@ -178,31 +184,27 @@ func main() {
 			systray.SetTitle("SimMusic")
 			systray.SetTooltip("SimMusic")
 			systray.SetOnTapped(func() { u.ShowWindow(true) })
-			mShow := systray.AddMenuItem("显示主界面", "")
-			mPlay := systray.AddMenuItem("播放 / 暂停", "")
-			mPrev := systray.AddMenuItem("上一首", "")
-			mNext := systray.AddMenuItem("下一首", "")
-			systray.AddSeparator()
-			mLyric := systray.AddMenuItem("桌面歌词", "")
-			systray.AddSeparator()
-			mQuit := systray.AddMenuItem("退出 SimMusic", "")
-			for {
-				select {
-				case <-mShow.ClickedCh:
-					u.ShowWindow(true)
-				case <-mPlay.ClickedCh:
-					a.TogglePlay()
-				case <-mPrev.ClickedCh:
-					a.Prev()
-				case <-mNext.ClickedCh:
-					a.Next(false)
-				case <-mLyric.ClickedCh:
-					a.State.Set("desk.visible", !a.State.Bool("desk.visible"))
-					u.Invalidate()
-				case <-mQuit.ClickedCh:
-					u.Quit()
-				}
-			}
+			// The menu is the application's own, drawn like its other menus, opened where the icon was clicked.
+			labels := []string{"显示主界面", "播放 / 暂停", "上一首", "下一首", "", "桌面歌词", "", "退出 SimMusic"}
+			systray.SetOnSecondaryTapped(func() {
+				u.ShowPointerMenu(labels, func(index int) {
+					switch labels[index] {
+					case "显示主界面":
+						u.ShowWindow(true)
+					case "播放 / 暂停":
+						a.TogglePlay()
+					case "上一首":
+						a.Prev()
+					case "下一首":
+						a.Next(false)
+					case "桌面歌词":
+						a.State.Set("desk.visible", !a.State.Bool("desk.visible"))
+						u.Invalidate()
+					case "退出 SimMusic":
+						u.Quit()
+					}
+				})
+			})
 		}, nil)
 	}()
 

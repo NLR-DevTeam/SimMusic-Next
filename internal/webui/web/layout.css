@@ -49,33 +49,4 @@ html { font-family: var(--appFont, "Microsoft YaHei"), "Microsoft YaHei", sans-s
 .musicInfoBottom > div { font-size: .9em; opacity: .8; }
 #playerBar .center { position: absolute; inset: 0 300px; display: flex; justify-content: center; align-items: center; margin-top: 5px; }
 #playerBar .volBtnBottom { width: 150px; position: absolute; top: 5px; bottom: 0; right: 30px; display: flex; align-items: center; }
-#playPage { position: fixed; inset: 0; background: white; overflow: hidden; transform: translateY(120vh); transition: transform .3s; }
-.playerShown #playPage { transform: translateY(0); }
-.playerContainer { position: absolute; inset: 0; margin: 20px max(calc(50vw - 500px), 90px); transition: transform .2s; }
-body:not(.hideLyrics.hideList) .playerContainer { transform: translateX(-25px); }
-.controls { position: absolute; inset: 0; margin: auto 0; width: 350px; height: fit-content; display: flex; flex-direction: column; z-index: 5; transition: margin .3s, transform .3s; }
-.hideLyrics.hideList .controls { margin: auto calc(50% - 175px); transform: scale(1.05); }
-#largeCover { width: 360px; height: 360px; margin: -5px; object-fit: cover; border-radius: 10px; background: white; box-shadow: 0 20px 25px -5px #00000019, 0 8px 10px -6px #00000019; transition: transform .4s cubic-bezier(.3,.7,0,1.8); }
-.albumScale:not(.playing) #largeCover { transform: scale(.95); }
-.infoBar { display: flex; align-items: center; margin: 30px 0 10px; }
-.musicInfo { width: calc(100% - 30px); }
-.musicInfo b, .musicInfo div { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.musicInfo b { font-size: 1.3em; }
-.musicInfo div { font-size: .9em; opacity: .8; }
-.progressControl { display: flex; align-items: center; margin: 10px 0; }
-.progressControl span { width: 55px; font-size: .85em; opacity: .8; }
-.progressControl span:last-child { text-align: right; }
-.controls .buttons { display: flex; justify-content: center; align-items: center; margin-top: 5px; }
-.lyrics, .list { position: absolute; left: 410px; top: 0; width: calc(100% - 410px); height: 100%; transform-origin: left center; transition: transform .3s, opacity .3s; -webkit-mask-image: linear-gradient(transparent, #0009 15%, black 25%, black 75%, #0009 85%, transparent); }
-.hideLyrics .lyrics, .hideList .list { transform: scale(.6); opacity: 0; pointer-events: none; }
-.lyricsScroll { --align: left; --inactiveZoom: .8; --lineSpace: .5em; --lrcTranslation: .8em; overflow-y: auto; text-align: var(--align); }
-.lyricsScroll::before, .lyricsScroll::after { content: ""; display: block; height: 50%; }
-.lyricLine { color: var(--normalColor); font-size: var(--lyricSize, 36px); margin: calc(var(--lineSpace) * var(--inactiveZoom)) .2em; transform: scale(var(--inactiveZoom)); transform-origin: var(--align) center; transition: color .3s, transform .3s, margin .3s, filter 0s; }
-.lyricLine.active { color: var(--activeColor); transform: scale(1); margin: var(--lineSpace) .2em; transition: color .3s, transform .3s, margin .3s, filter .3s; }
-.lyricLine:not(.active):hover { color: var(--hoverColor); }
-.lyricLine span { display: block; font-size: var(--lrcTranslation); }
-.darkPlayer #playPage { background: black; color: #ffffffe6; }
-.darkPlayer .controls .iconButton:hover { background: #ffffff0d; }
-.threeEffect .controls { transform: perspective(900px) rotateY(10deg); }
-.threeEffect .lyrics, .threeEffect .list { transform: perspective(900px) rotateY(-12.5deg); }
 

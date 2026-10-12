@@ -91,7 +91,7 @@ window.su5 = {
 			// 判断留空与回车跳转处理
 			ele.onkeydown = e => {
 				if (e.key == "Enter") {
-					if (document.activeElement.tagName == "TEXTAREA" && !e.ctrlKey && !e.shiftKey) return;
+					if (e.target.tagName == "TEXTAREA" && !e.ctrlKey && !e.shiftKey) return;
 					e.preventDefault();
 					if (!ele.classList.contains("allowEmpty") && !field(ele).value.trim()) {
 						clearTimeout(ele.inputTipTimeout);
@@ -183,7 +183,7 @@ window.su5 = {
 			}
 		},
 		getValue(id, options = {}) {
-			const form = document.getElementById(id);
+			const form = document.getElementById(id) || su5.dialog.find?.(id);
 			const json = {};
 			for (const input of form.querySelectorAll("input, select, textarea")) {
 				// 检查是否留空
@@ -258,7 +258,7 @@ window.su5 = {
 				const { id, content, container } = su5.dialog.create(config.title ?? "提示", config.subtitle ?? "");
 				content[config.text.startsWith("html:") ? "innerHTML" : "innerText"] = config.text.replace("html:", "");
 				const buttonGroup = su5.utils.createElement("div", "", ["buttons"], content);
-				const cancelButton = su5.utils.createElement("button", config.cancelHtml ?? "取消", ["sub"], buttonGroup);
+				const cancelButton = su5.utils.createElement("button", config.cancelHtml ?? "取消", ["sub", "cancel"], buttonGroup);
 				cancelButton.onclick = () => {
 					resolve(false);
 					su5.dialog.show(id, false);
@@ -304,7 +304,7 @@ window.su5 = {
 					input.value = item.value ?? "";
 				});
 				const buttonGroup = su5.utils.createElement("div", "", ["buttons"], content);
-				const cancelButton = su5.utils.createElement("button", config.cancelHtml ?? "取消", ["sub"], buttonGroup);
+				const cancelButton = su5.utils.createElement("button", config.cancelHtml ?? "取消", ["sub", "cancel"], buttonGroup);
 				cancelButton.onclick = () => {
 					resolve(false);
 					su5.dialog.show(id, false);
@@ -364,6 +364,10 @@ window.su5 = {
 				this.#dragging = false;
 				if (this.onchange) this.onchange(this.value);
 			};
+			// 拖动可能等不到 change（松开前窗口失去焦点、鼠标捕获被其他窗口取走）：此时也结束拖动状态，否则之后的赋值会一直被忽略
+			const endDrag = () => { this.#dragging = false; };
+			["pointerup", "pointercancel", "blur"].forEach(type => this.#input.addEventListener(type, endDrag));
+			window.addEventListener("blur", endDrag);
 			// 读取信息
 			this.min = Number(element.getAttribute("min")) ?? options.min ?? parseFloat(element.getAttribute("min")) ?? 0;
 			this.max = Number(element.getAttribute("max")) ?? options.max ?? parseFloat(element.getAttribute("max")) ?? this.min + 100;

@@ -9,7 +9,7 @@ $target = Join-Path $cefDirectory $distribution
 $url = "https://cef-builds.spotifycdn.com/$([Uri]::EscapeDataString($archiveName))"
 New-Item -ItemType Directory -Force $cefDirectory | Out-Null
 $sourceSDK = Join-Path $cefDirectory "chromiumembedded-cef-5891c70"
-if ((Test-Path -LiteralPath (Join-Path $sourceSDK "include/cef_api_hash.h")) -and (Test-Path -LiteralPath (Join-Path $workspace "build/runtime/libcef.dll")) -and (Get-Item -LiteralPath (Join-Path $workspace "build/runtime/libcef.dll")).VersionInfo.FileVersion -match '^106\.') { return $sourceSDK }
+if ((Test-Path -LiteralPath (Join-Path $sourceSDK "include/cef_api_hash.h")) -and (Test-Path -LiteralPath (Join-Path $workspace "build/win/runtime/libcef.dll")) -and (Get-Item -LiteralPath (Join-Path $workspace "build/win/runtime/libcef.dll")).VersionInfo.FileVersion -match '^106\.') { return $sourceSDK }
 if (!(Test-Path (Join-Path $target "include/cef_api_hash.h"))) {
     if (!(Test-Path $archive)) {
         & curl.exe -L --fail --retry 3 $url -o $archive

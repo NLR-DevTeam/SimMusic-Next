@@ -83,24 +83,3 @@ func (u *UI) syncMedia() {
 		}
 	}
 }
-
-// mediaAction handles a control pressed on the taskbar preview or the system media controls.
-func (u *UI) mediaAction(action string) {
-	a := u.app
-	switch action {
-	case "previous":
-		a.Prev()
-	case "next":
-		a.Next(false)
-	case "toggle":
-		a.TogglePlay()
-	case "play":
-		if !a.Snapshot().Playing {
-			a.TogglePlay()
-		}
-	case "pause", "stop":
-		if a.Snapshot().Playing {
-			a.TogglePlay()
-		}
-	}
-}

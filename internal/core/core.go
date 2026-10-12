@@ -44,10 +44,7 @@ var Defaults = map[string]any{
 	"list.themeImageBlur": false,
 	"list.leftBarWidth":   200.0,
 	// 播放界面
-	"play.dark":         false,
-	"play.dynamicBg":    true,
-	"play.effect3D":     false,
-	"play.coverScale":   true,
+	"play.page":         "", // 所选播放页「扩展 id/播放页 id」；空为内置播放页
 	"ctl.quickReplay":   false,
 	"ctl.fade":          true,
 	"audio.device":      "", // 输出设备 ID；空为系统默认
@@ -58,11 +55,8 @@ var Defaults = map[string]any{
 	"sleep.extendToEnd": true,
 	"sleep.action":      "none",
 	// 歌词视图
-	"lrc.blur":      true,
-	"lrc.align":     "left",
-	"lrc.size":      1.5,
-	"lrc.spacing":   0.5,
 	"lrc.multiLang": true,
+	"lrc.perWord":   lyrics.WordsSource, // 逐字歌词解析：source 按原歌词处理 / extend 扩展到全曲 / all 所有歌曲
 	"lrc.transSize": 0.8,
 	// 桌面歌词
 	"dl.rememberState": true,
@@ -113,9 +107,16 @@ type App struct {
 	shuffle   []int // 正常队列的索引排列；队列中每首歌只出现一次。
 	lyricsRaw string
 	lyricLns  []lyrics.Line
-	lyricKey  string
-	loadGen   int
-	loading   int // loadGen of the audio load in flight, zero when idle
+	// The word-by-word reading of lyricsRaw, kept until the text, the settings or the duration change.
+	words struct {
+		raw, mode string
+		multi     bool
+		duration  float64
+		lines     []lyrics.WordLine
+	}
+	lyricKey string
+	loadGen  int
+	loading  int // loadGen of the audio load in flight, zero when idle
 	// While a track the user switched to is opening, the player shows that track: its start
 	// position, and whether it will play once ready (play / pause pressed meanwhile only flips this).
 	switching int
@@ -356,6 +357,7 @@ type Snapshot struct {
 	Playing  bool
 	Pos, Dur float64
 	Lyrics   []lyrics.Line
+	Words    []lyrics.WordLine // word-by-word lyrics; nil when the song has none
 	Volume   float64
 	Speed    float64
 	Loading  bool // the current track's audio is still being opened
@@ -384,6 +386,7 @@ func (a *App) Snapshot() Snapshot {
 	if s.Dur == 0 && s.Current != nil {
 		s.Dur = s.Current.Duration
 	}
+	s.Words = a.lyricWords(s.Dur)
 	s.Volume = a.Engine.Volume()
 	s.Speed = a.Engine.Speed()
 	return s
@@ -577,24 +580,21 @@ func (a *App) startTrackAt(i int, autoplay bool, startPos float64, normal bool) 
 		if err != nil {
 			// Nothing of the song shown is loaded; the previous one must not come back on "play".
 			a.Engine.Unload()
-			a.failPlayback(fresh, err)
 			a.mu.Lock()
 			a.failCount++
-			fc, n := a.failCount, len(a.queue)
 			a.mu.Unlock()
-			if fc < n && autoplay {
-				time.Sleep(600 * time.Millisecond)
-				a.Next(false)
-			}
+			a.failPlayback(fresh, err, gen)
 			return
 		}
 		a.mu.Lock()
-		if gen != a.loadGen || i >= len(a.queue) {
+		// The queue may have changed while the song was opening (another one taken out or moved): the
+		// current index follows the song through that, the position it was started at does not.
+		if gen != a.loadGen || a.index < 0 || a.index >= len(a.queue) || a.queue[a.index].Key() != t.Key() {
 			a.mu.Unlock()
 			return
 		}
 		a.failCount = 0
-		a.queue[i] = fresh
+		a.queue[a.index] = fresh
 		a.lyricsRaw, a.lyricLns = raw, lyrics.Parse(raw, a.Cfg.Bool("lrc.multiLang"))
 		a.mu.Unlock()
 		if startPos > 0 {
@@ -652,7 +652,7 @@ func (a *App) restoreCurrent(t model.Track, gen int) {
 		return
 	}
 	if err := a.Engine.LoadWhen(audio.Source{Path: info.Playback.Path, URL: info.Playback.URL, Headers: info.Playback.Headers, Format: info.Format}, a.playIntent(gen)); err != nil {
-		a.failPlayback(fresh, playFailure{audioReason(err), err})
+		a.failPlayback(fresh, playFailure{audioReason(err), err}, gen)
 		return
 	}
 	// The position may have been moved while the audio was opening. Once the engine
@@ -685,7 +685,9 @@ func audioReason(err error) string {
 	return "音频无法打开或解码"
 }
 
-func (a *App) failPlayback(t model.Track, err error) {
+// failPlayback tells the user that the song of load gen cannot be played and asks whether to go on to the
+// next one: confirming does, cancelling leaves the player stopped on this song.
+func (a *App) failPlayback(t model.Track, err error, gen int) {
 	reason := "未知错误"
 	var failure playFailure
 	if errors.As(err, &failure) {
@@ -699,7 +701,24 @@ func (a *App) failPlayback(t model.Track, err error) {
 	if title == "" {
 		title = "未知歌曲"
 	}
-	a.Alert("歌曲播放失败：" + title + "\n原因：" + reason)
+	text := "歌曲播放失败：" + title + "\n原因：" + reason
+	// The song is no longer loading while the question stands.
+	a.loaded(gen)
+	next, askErr := a.Confirm(text + "\n是否切换到下一曲？")
+	if askErr != nil {
+		a.Alert(text)
+		return
+	}
+	a.mu.Lock()
+	// Answered after the user moved on to another song by themself: nothing is left to decide.
+	current := gen == a.loadGen
+	if current && !next {
+		a.wantPlay = false
+	}
+	a.mu.Unlock()
+	if current && next {
+		a.Next(false)
+	}
 }
 
 func (a *App) loadPreparedTrack(t model.Track, play func() bool, prepared *playPrefetch) (model.Track, string, error) {

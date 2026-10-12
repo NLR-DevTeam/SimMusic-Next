@@ -27,7 +27,7 @@ func validateManifest(man Manifest) error {
 	if man.Main != "" && !safeArchivePath(man.Main) {
 		return errors.New("扩展入口必须是包内相对路径")
 	}
-	return nil
+	return validatePlayPages(man.PlayPages)
 }
 
 func safeArchivePath(name string) bool {
