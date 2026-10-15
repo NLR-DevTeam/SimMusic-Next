@@ -74,33 +74,3 @@ func TestSidebarInstallGrantAndRevocation(t *testing.T) {
 		t.Fatal("revocation must persist")
 	}
 }
-
-func TestSidebarPreferenceMigration(t *testing.T) {
-	for _, test := range []struct {
-		name                    string
-		old, explicit, declared bool
-	}{
-		{"preserve old allow", true, false, true},
-		{"preserve old denial", false, false, true},
-		{"existing grant wins", false, true, true},
-		{"migration cannot declare permission", true, false, false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			values := map[string]any{"plugin.sidebar.test": test.old}
-			if test.explicit {
-				values[grantKey("test", PermSidebar)] = true
-			}
-			var permissions []string
-			if test.declared {
-				permissions = []string{PermSidebar}
-			}
-			_, p, store := permissionFixture(t, permissions, true, values)
-			if p.HasPermission(PermSidebar) != (test.declared && (test.old || test.explicit)) {
-				t.Fatal("migration changed the effective grant")
-			}
-			if store.Get("plugin.sidebar.test") != nil {
-				t.Fatal("legacy preference must be retired")
-			}
-		})
-	}
-}

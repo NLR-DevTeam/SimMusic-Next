@@ -19,9 +19,8 @@ func musicFixture(t *testing.T, script string, menus []model.Action) (*App, *plu
 	dir := t.TempDir()
 	a := &App{DataDir: dir, State: config.Open(filepath.Join(dir, "state.json"), nil)}
 	a.Plugins = plugin.NewManager(filepath.Join(dir, "plugin-data"), filepath.Join(dir, "plugins"), a.State, nil)
-	manifest := plugin.Manifest{ID: "test", Version: "1", Permissions: []string{"network", "trackMenu", "shell"}, TrackMenus: menus}
 	yes := true
-	manifest.Capabilities.Download = &yes
+	manifest := plugin.Manifest{ID: "test", Version: "1", Permissions: []string{"network", "trackMenu", "shell"}, TrackMenus: menus, Schemes: []plugin.SchemeDeclaration{{Scheme: "test", Download: &yes}}}
 	b, _ := json.Marshal(manifest)
 	if err := a.Plugins.AddBuiltin(fstest.MapFS{"plugin.json": {Data: b}, "main.js": {Data: []byte(script)}}); err != nil {
 		t.Fatal(err)
@@ -76,7 +75,7 @@ func TestDownloadMenuGrant(t *testing.T) {
 	if !a.CanDownload(track) {
 		t.Fatal("declared download capability must be usable")
 	}
-	if err := p.SetTrackMenuGranted("download", false); err != nil {
+	if err := p.SetTrackMenuGranted("scheme:test/download", false); err != nil {
 		t.Fatal(err)
 	}
 	if a.CanDownload(track) {
@@ -84,9 +83,6 @@ func TestDownloadMenuGrant(t *testing.T) {
 	}
 	if _, _, err := a.musicInfos([]model.Track{track}, "download"); err == nil {
 		t.Fatal("direct scene call bypassed revocation")
-	}
-	if _, err := p.Call(time.Second, "getMusicInfo", []string{"a"}, "download"); err == nil {
-		t.Fatal("Goja callback bypassed revocation")
 	}
 }
 
@@ -155,21 +151,21 @@ func TestSongMenuSceneGrantsAndExecution(t *testing.T) {
 	menus := []model.Action{{Key: "reveal", Label: "Reveal", Scenes: []string{"list"}, Permissions: []string{"shell"}, Selection: "single"}, {Key: "quality", Label: "Quality", Scenes: []string{"play"}, Dynamic: true}}
 	a, p := musicFixture(t, `exports.getMusicInfo = () => []; exports.getTrackActions = () => [{key:"lossless",label:"Lossless",icon:"EF83"}]; exports.onTrackAction = (key, tracks, scene) => sim.settings.set("last", {key,scene});`, menus)
 	refs := []model.Track{{Source: "test", ID: "a"}}
-	if err := a.ExecuteSongAction(refs, "reveal", "play"); err == nil {
+	if err := a.ExecuteSongAction(refs, "scheme:test/reveal", "play"); err == nil {
 		t.Fatal("scene mismatch accepted")
 	}
-	if err := a.ExecuteSongAction(refs, "forged", "list"); err == nil {
+	if err := a.ExecuteSongAction(refs, "scheme:test/forged", "list"); err == nil {
 		t.Fatal("undeclared menu accepted")
 	}
-	if err := a.ExecuteSongAction(refs, "quality/lossless", "play"); err != nil {
+	if err := a.ExecuteSongAction(refs, "scheme:test/quality/lossless", "play"); err != nil {
 		t.Fatal(err)
 	}
-	p.SetTrackMenuGranted("quality", false)
-	if err := a.ExecuteSongAction(refs, "quality/lossless", "play"); err == nil {
+	p.SetTrackMenuGranted("scheme:test/quality", false)
+	if err := a.ExecuteSongAction(refs, "scheme:test/quality/lossless", "play"); err == nil {
 		t.Fatal("revoked ancestor accepted")
 	}
 	a.Plugins.SetGranted(p.ID(), plugin.PermShell, false)
-	if err := a.ExecuteSongAction(refs, "reveal", "list"); err == nil {
+	if err := a.ExecuteSongAction(refs, "scheme:test/reveal", "list"); err == nil {
 		t.Fatal("revoked API permission accepted")
 	}
 	a.Plugins.SetGranted(p.ID(), plugin.PermTrackMenu, false)

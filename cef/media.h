@@ -154,10 +154,26 @@ static void initTransportControls(HWND window) {
     SLOT(transportControls, 11, boolean)(transportControls, 0);
 }
 // fields: title, artist, cover address — each may be empty.
+// Only what changed is handed to the system: playing and pausing set the status alone, and the display
+// (text and picture) is updated when the song shown is another one. Updating it with what it already
+// shows makes the system's media controls reload the picture and flicker.
 static void updateTransportControls(wchar_t **fields) {
+    static int shownState = -1;
+    static wchar_t shown[8192 + 4];
     if (!transportControls) return;
-    SLOT(transportControls, 11, boolean)(transportControls, mediaState != mediaNone);
-    SLOT(transportControls, 7, int)(transportControls, mediaState == mediaPlaying ? 3 : mediaState == mediaPaused ? 4 : 0);
+    wchar_t display[8192 + 4];
+    _snwprintf(display, 8192 + 3, L"%ls\t%ls\t%ls", fields[0], fields[1], fields[2]);
+    display[8192 + 3] = 0;
+    int stateChanged = shownState != (int)mediaState, displayChanged = wcscmp(display, shown) != 0;
+    // Coming from nothing, or going to it, the display is set up or cleared whatever it last held.
+    int appeared = stateChanged && (shownState <= (int)mediaNone || mediaState == mediaNone);
+    if (stateChanged) {
+        SLOT(transportControls, 11, boolean)(transportControls, mediaState != mediaNone);
+        SLOT(transportControls, 7, int)(transportControls, mediaState == mediaPlaying ? 3 : mediaState == mediaPaused ? 4 : 0);
+        shownState = (int)mediaState;
+    }
+    if (!displayChanged && !appeared) return;
+    wcscpy(shown, display);
     void *updater = NULL, *music = NULL;
     if (FAILED(SLOT(transportControls, 8, void **)(transportControls, &updater)) || !updater) return;
     if (mediaState == mediaNone) SLOT(updater, 16)(updater);
@@ -202,8 +218,9 @@ static void mediaChanged(HWND window, const COPYDATASTRUCT *data) {
     for (wchar_t *p = text; *p && count < 4; p++) if (*p == L'\t') { *p = 0; fields[count++] = p + 1; }
     mediaState = fields[0][0] == L'2' ? mediaPlaying : fields[0][0] == L'1' ? mediaPaused : mediaNone;
     // In case the taskbar button was announced before this window listened for it.
-    if (!thumbAdded && IsWindowVisible(window)) addThumbButtons(window);
-    updateThumbButtons(window);
+    static int thumbState = -1;
+    if (!thumbAdded && IsWindowVisible(window)) { addThumbButtons(window); thumbState = -1; }
+    if (thumbState != (int)mediaState) { updateThumbButtons(window); thumbState = (int)mediaState; }
     updateTransportControls(fields + 1);
 }
 // ---------- opening folders, files and addresses ----------

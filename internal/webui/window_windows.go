@@ -42,10 +42,10 @@ func (u *UI) Run() (runErr error) {
 	exe, _ := os.Executable()
 	host := filepath.Join(filepath.Dir(exe), "runtime", "SimMusicCef.exe")
 	if _, err = os.Stat(host); err != nil {
-		return fmt.Errorf("找不到 CEF 宿主 %s，请运行 build.ps1：%w", host, err)
+		return fmt.Errorf("找不到 CEF 宿主 %s，请运行 build-win.ps1：%w", host, err)
 	}
 	cmd := exec.Command(host, "--simmusic-url="+url, "--simmusic-cache="+filepath.Join(u.app.DataDir, "cef-cache"), "--simmusic-log="+filepath.Join(u.app.DataDir, "logs", "cef.log"),
-		"--enable-smooth-scrolling", "--enable-features=WindowsScrollingPersonality,FluentScrollbar")
+		"--enable-smooth-scrolling", "--enable-features=WindowsScrollingPersonality,FluentScrollbar", "--disable-spell-checking")
 	// Pages of extension webviews are not held to cross-origin response headers (Access-Control-Allow-*).
 	// Chromium 106 only offers this for the whole browser process; the interface page stays confined by its
 	// own Content-Security-Policy, and its API by the access token and the Origin check.

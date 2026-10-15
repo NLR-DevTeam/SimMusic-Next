@@ -59,7 +59,7 @@ func (u *UI) Run() (runErr error) {
 	cmd := exec.Command(host, "--simmusic-url="+url, "--simmusic-cache="+filepath.Join(u.app.DataDir, "cef-cache"), "--simmusic-log="+filepath.Join(u.app.DataDir, "logs", "cef.log"),
 		"--simmusic-icon="+filepath.Join(u.app.DataDir, "app-icon.png"), "--simmusic-icon-font="+icons,
 		// The host places and shapes its windows through X11; under Wayland it runs on XWayland.
-		"--ozone-platform=x11", "--enable-smooth-scrolling")
+		"--ozone-platform=x11", "--enable-smooth-scrolling", "--disable-spell-checking")
 	// See the Windows host: extension pages are not held to cross-origin response headers.
 	cmd.Args = append(cmd.Args, "--disable-web-security")
 	if port, err := strconv.Atoi(os.Getenv("SIMMUSIC_CEF_DEBUG")); err == nil && port >= 1024 && port <= 65535 {

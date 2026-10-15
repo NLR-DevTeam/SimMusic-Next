@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"simmusic/internal/core"
 	"simmusic/internal/model"
 	"simmusic/internal/plugin"
 )
@@ -39,8 +40,7 @@ type playView struct {
 	sent  map[string]string
 	color string
 	dark  bool
-	fetch map[string]bool // songs whose information is being read for the page
-	full  bool            // the main window is fullscreen
+	full  bool // the main window is fullscreen
 	// Where the host page last placed the view; it may say so before it asks for the view to be shown.
 	layout any
 }
@@ -133,7 +133,7 @@ func (u *UI) syncPlayView() {
 		return
 	}
 	pv := &playView{key: playPageKey(p, page), plugin: p, page: page, base: base, created: make(chan struct{}), done: make(chan struct{}),
-		jobs: make(chan func(), 64), sent: map[string]string{}, color: page.Background, dark: page.Dark, fetch: map[string]bool{}}
+		jobs: make(chan func(), 64), sent: map[string]string{}, color: page.Background, dark: page.Dark}
 	if pv.color == "" {
 		pv.color = "#ffffff"
 		if page.Dark {
@@ -183,12 +183,18 @@ func (u *UI) failPlayView(pv *playView, reason string) {
 func (pv *playView) run(u *UI) {
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
-	for {
+	for tick := 0; ; tick++ {
 		select {
 		case job := <-pv.jobs:
 			job()
 		case <-ticker.C:
-			pv.push(u, false)
+			// A hidden page shows nothing: it is brought up to date once a second, and at once when it is shown.
+			pv.mu.Lock()
+			shown := pv.shown
+			pv.mu.Unlock()
+			if shown || tick%4 == 0 {
+				pv.push(u, false)
+			}
 		case <-pv.done:
 			return
 		case <-u.quit:
@@ -286,13 +292,6 @@ func (pv *playView) perform(u *UI, action string, args []any) (any, error) {
 	if !pv.plugin.PlayPagesAllowed() {
 		return nil, errors.New("权限被拒绝：播放页或播放控制未授权")
 	}
-	number := func(i int) float64 {
-		if i < len(args) {
-			v, _ := args[i].(float64)
-			return v
-		}
-		return 0
-	}
 	switch action {
 	case "hello":
 		pv.mu.Lock()
@@ -305,8 +304,8 @@ func (pv *playView) perform(u *UI, action string, args []any) (any, error) {
 	case "pointer":
 	case "showMenu":
 		// The song menu of the play page, or with { scene: "queue", index } that of one song of the queue.
-		request := map[string]any{"kind": "songMenu", "x": number(0), "y": number(1), "scene": "play"}
-		if options, _ := append(args, nil, nil, nil)[2].(map[string]any); options["scene"] == "queue" {
+		request := map[string]any{"kind": "songMenu", "scene": "play"}
+		if options, _ := append(args, nil)[0].(map[string]any); options["scene"] == "queue" {
 			request["scene"], request["index"] = "queue", options["index"]
 		}
 		u.playRequest(request)
@@ -335,8 +334,36 @@ func (pv *playView) perform(u *UI, action string, args []any) (any, error) {
 		shown, _ := append(args, nil)[0].(bool)
 		u.app.State.Set("lrcShow", shown)
 		u.playRequest(map[string]any{"kind": "lyricsShown", "value": shown})
+	case "spectrum":
+		// Asked for every frame of a visualization: answered without a delivery of the state.
+		bands := 64
+		if value, ok := append(args, nil)[0].(float64); ok {
+			bands = int(value)
+		}
+		return u.app.PlayerSpectrum(bands), nil
+	case "setQueue", "append", "playNext":
+		refs, err := plugin.QueueRefs(append(args, nil)[0])
+		if err != nil {
+			return nil, err
+		}
+		options, err := plugin.ParseQueueOptions(append(args, nil, nil)[1])
+		if err != nil {
+			return nil, err
+		}
+		op := map[string]string{"setQueue": "set", "append": "append", "playNext": "playNext"}[action]
+		if err := u.app.PlayerQueue(pv.plugin, op, refs, options); err != nil {
+			return nil, err
+		}
+		pv.push(u, false)
 	case "loadInfo":
-		pv.loadInfo(u, append(args, nil)[0])
+		var indexes []int
+		list, _ := append(args, nil)[0].([]any)
+		for _, item := range list {
+			if index, ok := item.(float64); ok {
+				indexes = append(indexes, int(index))
+			}
+		}
+		u.app.PlayerLoadInfo(indexes)
 	case "showDialog":
 		name, _ := append(args, "")[0].(string)
 		if name != "equalizer" && name != "sleep" && name != "speed" {
@@ -365,63 +392,25 @@ func (pv *playView) perform(u *UI, action string, args []any) (any, error) {
 	return true, nil
 }
 
-// loadInfo reads the information of songs of the queue the page shows and the index does not hold yet.
-func (pv *playView) loadInfo(u *UI, value any) {
-	indexes, _ := value.([]any)
-	queue := u.app.Snapshot().Queue
-	var missing []model.Track
-	pv.mu.Lock()
-	u.mu.Lock()
-	for _, item := range indexes {
-		index, ok := item.(float64)
-		if !ok || index < 0 || int(index) >= len(queue) || len(missing) >= 200 {
-			continue
-		}
-		t := queue[int(index)]
-		if known, ok := u.tracks[t.Key()]; ok && known.InfoRevision >= t.InfoRevision {
-			t = known
-		}
-		if !t.InfoReady && !pv.fetch[t.Key()] {
-			pv.fetch[t.Key()] = true
-			missing = append(missing, t)
-		}
-	}
-	u.mu.Unlock()
-	pv.mu.Unlock()
-	if len(missing) == 0 {
-		return
-	}
-	go func() {
-		fresh, err := u.app.GetMusicInfo(missing, "list")
-		pv.mu.Lock()
-		for _, t := range missing {
-			delete(pv.fetch, t.Key())
-		}
-		pv.mu.Unlock()
-		if err != nil {
-			u.Alert(u.app.MusicInfoFailed(missing, err).Error())
-			return
-		}
-		u.remember(fresh)
-		select {
-		case pv.jobs <- func() { pv.push(u, false) }:
-		default:
-		}
-	}()
-}
-
 // pageTrack adds the addresses the page loads the song's covers from, on its own origin.
 func pageTrack(t model.Track) map[string]any {
-	out := map[string]any{"infoReady": t.InfoReady || t.Cover != "", "source": t.Source, "id": t.ID, "title": t.Title, "artist": t.Artist, "album": t.Album, "duration": t.Duration, "infoRevision": t.InfoRevision}
+	out := core.PublicTrack(t)
 	address := "/.sim/cover?key=" + url.QueryEscape(t.Key()) + "&rev=" + strconv.FormatUint(t.InfoRevision, 10)
 	out["cover"], out["largeCover"] = address, address+"&scene=play"
 	return out
 }
 
-var playStateGroups = map[string][]string{
-	"track": {"current", "index"}, "queue": {"queue"}, "lyrics": {"lyrics"},
-	"status": {"playing", "loading", "duration", "volume", "speed", "mode", "sleep", "settings", "windowMaximized", "fullscreen"}, "view": {"visible", "side"},
-}
+// A play page is told what sim.player tells a script, in the same groups, and besides that what concerns
+// it as a view: the window it is in with the status, and whether and how it is shown as "view".
+var playStateGroups = func() []plugin.PlayerGroup {
+	groups := append([]plugin.PlayerGroup(nil), plugin.PlayerGroups...)
+	for i, group := range groups {
+		if group.Name == "status" {
+			groups[i].Keys = append(append([]string(nil), group.Keys...), "windowMaximized", "fullscreen")
+		}
+	}
+	return append(groups, plugin.PlayerGroup{Name: "view", Keys: []string{"visible", "side"}})
+}()
 
 // push sends the page what changed since the last delivery. A hidden page stays up to date, so that
 // it is right the moment it is shown, but is not told the position as it advances.
@@ -442,27 +431,21 @@ func (pv *playView) push(u *UI, force bool) {
 		return pageTrack(t)
 	})
 	u.mu.Unlock()
-	settings := map[string]any{}
-	for key, value := range u.app.Cfg.All() {
-		if key != "play.page" && (strings.HasPrefix(key, "play.") || strings.HasPrefix(key, "lrc.") || key == "general.font") {
-			settings[key] = value
-		}
-	}
-	state["settings"], state["visible"], state["side"] = settings, pv.shown, pv.side
+	state["visible"], state["side"] = pv.shown, pv.side
 	state["windowMaximized"], state["fullscreen"] = u.maximized(), pv.full
 	patch := map[string]any{}
 	changed := []string{}
-	for group, keys := range playStateGroups {
+	for _, group := range playStateGroups {
 		part := map[string]any{}
-		for _, key := range keys {
+		for _, key := range group.Keys {
 			part[key] = state[key]
 		}
 		encoded, _ := json.Marshal(part)
-		if pv.sent[group] == string(encoded) {
+		if pv.sent[group.Name] == string(encoded) {
 			continue
 		}
-		pv.sent[group] = string(encoded)
-		changed = append(changed, group)
+		pv.sent[group.Name] = string(encoded)
+		changed = append(changed, group.Name)
 		for key, value := range part {
 			patch[key] = value
 		}
@@ -475,6 +458,14 @@ func (pv *playView) push(u *UI, force bool) {
 	patch["position"] = snapshot.Pos
 	if encoded, err := json.Marshal(map[string]any{"sim": "player", "event": "state", "state": patch, "changed": changed}); err == nil {
 		pv.post(u, string(encoded))
+	}
+	// A page that is not being drawn (closed, or its window out of sight) draws for a moment for another
+	// song: what it loads for it is ready when the page is next seen.
+	for _, group := range changed {
+		if group == "track" || group == "queue" || group == "lyrics" {
+			u.hostSend("stir", pv.id)
+			break
+		}
 	}
 }
 
@@ -512,6 +503,8 @@ func (u *UI) showPlayView(shown bool, side string) bool {
 		u.hostSend("eval", pv.id, "document.fullscreenElement&&document.exitFullscreen()")
 		u.hostSend("fullscreen", pv.id, "0")
 	} else if appeared && layout != nil {
+		// The page is told first: the host lets it draw what it now shows before sliding it into view.
+		pv.push(u, true)
 		u.hostSend(layoutFields(pv.id, layout)...)
 	}
 	select {

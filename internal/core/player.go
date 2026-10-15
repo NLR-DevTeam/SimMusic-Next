@@ -3,6 +3,8 @@ package core
 import (
 	"errors"
 	"math"
+	"strings"
+	"time"
 
 	"simmusic/internal/lyrics"
 
@@ -10,8 +12,10 @@ import (
 )
 
 // Playback control as extensions see it (the "player" permission): the state of the player and the
-// operations the play page offers. Song records are reduced to what is shown; cover references,
-// request headers and extension data never leave the host through here.
+// operations on it, the same for the script of an extension (sim.player) and for a play page (simPlayer).
+// Song records are reduced to what is shown; cover references and extension data never leave the host
+// through here: a cover is handed over as the picture itself. The audio of a queued song is, on request of a
+// script (sim.player.playback), as the file or the address with its request headers it is played from.
 
 // Lyrics as extensions and play pages get them: never the text a source supplied, always what the
 // host parsed from it, in the host's own shape. One field holds both kinds:
@@ -43,9 +47,11 @@ type Word struct {
 	Text  string  `json:"text"`
 }
 
-// PublicTrack is the part of a song an extension with playback control may read.
+// PublicTrack is the part of a song an extension with playback control may read. infoReady says whether the
+// index holds the song's information yet; until it does the title and the rest may be incomplete.
 func PublicTrack(t model.Track) map[string]any {
-	return map[string]any{"source": t.Source, "id": t.ID, "title": t.Title, "artist": t.Artist, "album": t.Album, "duration": t.Duration, "infoRevision": t.InfoRevision}
+	return map[string]any{"source": t.Source, "id": t.ID, "title": t.Title, "artist": t.Artist, "album": t.Album, "duration": t.Duration,
+		"infoRevision": t.InfoRevision, "infoReady": t.InfoReady || t.Cover != ""}
 }
 
 // PublicState turns a snapshot into the state object of sim.player and of play pages.
@@ -74,6 +80,15 @@ func (a *App) PublicState(s Snapshot, track func(model.Track) map[string]any) ma
 	if s.Current != nil {
 		current = track(*s.Current)
 	}
+	// The settings a player display goes by: those of the play interface and of the lyrics, and the interface font.
+	settings := map[string]any{}
+	if a.Cfg != nil {
+		for key, value := range a.Cfg.All() {
+			if key != "play.page" && (strings.HasPrefix(key, "play.") || strings.HasPrefix(key, "lrc.") || key == "general.font") {
+				settings[key] = value
+			}
+		}
+	}
 	sleep := a.Sleep()
 	var until int64
 	if !sleep.Until.IsZero() {
@@ -82,13 +97,89 @@ func (a *App) PublicState(s Snapshot, track func(model.Track) map[string]any) ma
 	return map[string]any{
 		"current": current, "index": s.Index, "queue": queue, "lyrics": map[string]any{"traditional": lines, "perWord": perWord},
 		"playing": s.Playing, "loading": s.Loading, "position": s.Pos, "duration": s.Dur,
-		"volume": s.Volume, "speed": s.Speed, "mode": s.Mode,
+		"volume": s.Volume, "speed": s.Speed, "mode": s.Mode, "settings": settings,
 		"sleep": map[string]any{"active": sleep.Active(), "until": until, "waitTrackEnd": sleep.WaitTrackEnd},
 	}
 }
 
-// PlayerState implements sim.player.state().
+// PlayerState is the state of sim.player: all a play page is told of the playback, in the same shape.
 func (a *App) PlayerState() map[string]any { return a.PublicState(a.Snapshot(), nil) }
+
+// PlayerCover is the picture data of the cover of a song in the player's state, the current one when source
+// and id are empty; large asks for the cover of the play page. nil when there is no such song or it has no
+// cover. An extension gets the picture itself, never where it came from.
+func (a *App) PlayerCover(source, id string, large bool) []byte {
+	s := a.Snapshot()
+	track := s.Current
+	if source != "" || id != "" {
+		track = nil
+		for i := range s.Queue {
+			if s.Queue[i].Source == source && s.Queue[i].ID == id {
+				track = &s.Queue[i]
+				break
+			}
+		}
+	}
+	if track == nil {
+		return nil
+	}
+	t := *track
+	if fresh, err := a.GetMusicInfo([]model.Track{t}, "list"); err == nil && len(fresh) == 1 {
+		// The large cover is known once the song has been opened; the list record does not carry it.
+		if fresh[0].LargeCover == "" || fresh[0].LargeCover == fresh[0].Cover {
+			fresh[0].LargeCover, fresh[0].LargeCoverHeaders, fresh[0].LargeCoverProvider, fresh[0].LargeCoverExpires = t.LargeCover, t.LargeCoverHeaders, t.LargeCoverProvider, t.LargeCoverExpires
+		}
+		t = fresh[0]
+	}
+	if large && t.LargeCover != "" && (t.LargeCoverExpires <= 0 || t.LargeCoverExpires > float64(time.Now().UnixMilli())/1000) {
+		t.Cover, t.CoverHeaders, t.CoverProvider = t.LargeCover, t.LargeCoverHeaders, t.LargeCoverProvider
+	}
+	return a.CoverBytes(t)
+}
+
+// PlayerSpectrum is the spectrum of what is being heard: bands levels from 0 to 1, from low to high.
+func (a *App) PlayerSpectrum(bands int) []float64 {
+	if a.Engine == nil {
+		return make([]float64, max(1, min(256, bands)))
+	}
+	return a.Engine.Spectrum(bands)
+}
+
+// PlayerLoadInfo reads the information of the songs at these positions of the queue that the index does not
+// hold yet, in the background: the state shows it once it is there.
+func (a *App) PlayerLoadInfo(indexes []int) {
+	queue := a.Snapshot().Queue
+	var missing []model.Track
+	a.mu.Lock()
+	if a.infoLoading == nil {
+		a.infoLoading = map[string]bool{}
+	}
+	for _, index := range indexes {
+		if index < 0 || index >= len(queue) || len(missing) >= 200 {
+			continue
+		}
+		t := queue[index]
+		if !t.InfoReady && t.Cover == "" && !a.infoLoading[t.Key()] {
+			a.infoLoading[t.Key()] = true
+			missing = append(missing, t)
+		}
+	}
+	a.mu.Unlock()
+	if len(missing) == 0 {
+		return
+	}
+	go func() {
+		_, err := a.GetMusicInfo(missing, "list")
+		a.mu.Lock()
+		for _, t := range missing {
+			delete(a.infoLoading, t.Key())
+		}
+		a.mu.Unlock()
+		if err != nil {
+			a.Alert(a.MusicInfoFailed(missing, err).Error())
+		}
+	}()
+}
 
 // PlayerCommand runs one playback operation by name, with positional arguments as JSON gave them.
 func (a *App) PlayerCommand(name string, args []any) (any, error) {
@@ -185,6 +276,19 @@ func (a *App) PlayerCommand(name string, args []any) (any, error) {
 		a.SetSleep(v)
 	case "cancelSleep":
 		a.ExitSleep()
+	case "showWindow":
+		// The main window, shown and brought to the front: for a control outside it (a taskbar or desktop widget).
+		if a.OnShowWindow != nil {
+			a.OnShowWindow()
+		}
+	case "showMenu":
+		// The play page's menu of the current song, where the pointer is: for a control outside the window.
+		if a.Snapshot().Current == nil {
+			return false, nil
+		}
+		if a.OnSongMenu != nil {
+			a.OnSongMenu()
+		}
 	default:
 		return nil, errors.New("未知的播放控制操作：" + name)
 	}

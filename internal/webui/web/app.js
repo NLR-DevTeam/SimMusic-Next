@@ -113,10 +113,16 @@ const refreshCatalog = async () => {
     renderNavigation();
     applyConfig();
     applyPlayTitle();
-    // The extension page in use went away or was exchanged: the play page closes rather than change under the user.
-    if (externalShown && catalog.playPage?.key !== externalKey) closeExternalPlay();
-    if (page.kind === "menu" && !catalog.plugins.some(plugin => plugin.manifest.id === page.plugin && plugin.sidebar?.items?.some(item => item.id === page.id))) await navigate({ kind: "home" });
+    // The page in use was exchanged (another style chosen, or the page went away and another one serves):
+    // the play page stays open and shows the new one. It only closes when no page is left.
+    if (externalShown && catalog.playPage?.key !== externalKey) {
+        if (catalog.playPage) { setExternalShown(true); sendPlayView({ value: true, text: playSide }); }
+        else closeExternalPlay();
+    }
+    if (page.kind === "menu" && !sidebarEntry(page.plugin, page.id)) await navigate({ kind: "home" });
+    if (page.kind === "playlist" && !dragActive && !listMoving) syncPlaylistPage();
     if (page.kind === "plugins" && !dragActive) renderPlugins();
+    if (page.kind === "plugin") syncPluginPage();
 };
 const applyConfig = () => {
     const config = catalog.config;
@@ -158,13 +164,21 @@ const setConfig = (key, value) => {
     return configUpdates.get(key)(value);
 };
 
+// An entry an extension keeps in the sidebar: in its own section, or in the host's tools group.
+const sidebarEntry = (pluginId, id) => {
+    const sidebar = catalog.plugins.find(item => item.manifest.id === pluginId)?.sidebar;
+    return [...(sidebar?.items || []), ...(sidebar?.tools || [])].find(item => item.id === id);
+};
+// The entry of the sidebar that stands for the page shown: the page of one extension belongs to "扩展".
+const activeNavTarget = () => JSON.stringify(page.kind === "plugin" ? { kind: "plugins" } : page);
 const navButton = (label, code, target) => {
     const button = document.createElement("button");
     button.className = "navItem";
     button.innerHTML = `${code ? icon(code) : ""}<span>${escapeText(label)}</span>`;
     button.navTarget = JSON.stringify(target);
-    button.classList.toggle("active", button.navTarget === JSON.stringify(page));
-    button.onclick = () => navigate(target);
+    button.classList.toggle("active", button.navTarget === activeNavTarget());
+    // A click on the entry already shown leaves every page for the placeholder shown at start.
+    button.onclick = () => navigate(button.classList.contains("active") ? { kind: "home" } : target);
     sidebarNav.append(button);
     return button;
 };
@@ -186,18 +200,19 @@ const renderNavigation = () => {
     sidebarNav.replaceChildren();
     // An extension's section is its own: the title, the entries, what a click opens and the
     // context menu all come from the extension. The host only draws them and passes events on.
-    catalog.plugins.filter(plugin => plugin.sidebar).forEach(plugin => {
+    const pluginEntry = (id, item, code = "") => {
+        const button = navButton(item.name, code, { kind: "menu", plugin: id, id: item.id });
+        button.oncontextmenu = async event => {
+            event.preventDefault();
+            const actions = await run("sidebarMenu", { plugin: id, menu: item.id });
+            const items = (actions || []).map(action => action.separator ? { separator: true } : { label: action.label, icon: action.icon, action: () => run("sidebarMenuAction", { plugin: id, menu: item.id, key: action.key }) });
+            if (items.length) showContext(items);
+        };
+    };
+    catalog.plugins.filter(plugin => plugin.sidebar?.title).forEach(plugin => {
         const id = plugin.manifest.id;
         navGroup(plugin.sidebar.title, plugin.sidebar.canAdd ? () => run("sidebarAdd", { plugin: id }) : null);
-        (plugin.sidebar.items || []).forEach(item => {
-            const button = navButton(item.name, "", { kind: "menu", plugin: id, id: item.id });
-            button.oncontextmenu = async event => {
-                event.preventDefault();
-                const actions = await run("sidebarMenu", { plugin: id, menu: item.id });
-                const items = (actions || []).map(action => action.separator ? { separator: true } : { label: action.label, icon: action.icon, action: () => run("sidebarMenuAction", { plugin: id, menu: item.id, key: action.key }) });
-                if (items.length) showContext(items, event.clientX, event.clientY);
-            };
-        });
+        (plugin.sidebar.items || []).forEach(item => pluginEntry(id, item));
     });
     navGroup("歌单", createPlaylist);
     catalog.playlists.forEach(playlist => {
@@ -206,12 +221,14 @@ const renderNavigation = () => {
         button.oncontextmenu = event => {
             event.preventDefault();
             showContext([
-                { label: "重命名", action: async () => { const name = await askName("重命名歌单", playlist.name); if (name) { await run("renamePlaylist", { id: playlist.id, text: name }); await refreshCatalog(); if (page.id === playlist.id) navigate(target); } } },
-                { label: "删除歌单", action: async () => { if (!await su5.dialog.confirm(`删除「${playlist.name}」？`)) return; await run("deletePlaylist", { id: playlist.id }); await refreshCatalog(); navigate({ kind: "home" }); } }
-            ], event.clientX, event.clientY);
+                { label: "重命名", action: async () => { const name = await askName("重命名歌单", playlist.name); if (name) { await run("renamePlaylist", { id: playlist.id, text: name }); await refreshCatalog(); } } },
+                { label: "删除歌单", action: async () => { if (!await su5.dialog.confirm(`删除「${playlist.name}」？`)) return; await run("deletePlaylist", { id: playlist.id }); await refreshCatalog(); } }
+            ]);
         };
     });
-    navGroup("功能");
+    // The tools group is the host's: its name and the absence of an add button are fixed. Extensions with
+    // the sidebar permission put entries of their own after the host's two.
+    navGroup("工具");
     navButton("搜索", icons.search, { kind: "search" });
     // Always present, folded away while there are no tasks, so it can animate in and out.
     const downloadButton = navButton("下载", icons.downloads, { kind: "downloads" });
@@ -219,6 +236,8 @@ const renderNavigation = () => {
     downloadButton.classList.add("collapsible");
     downloadButton.insertAdjacentHTML("beforeend", `<span id="downloadBadge" class="navBadge"></span>`);
     updateDownloadNav();
+    catalog.plugins.filter(plugin => plugin.sidebar).forEach(plugin => (plugin.sidebar.tools || []).forEach(item => pluginEntry(plugin.manifest.id, item, /^[0-9a-f]{4,5}$/i.test(item.icon || "") ? item.icon : icons.plugins)));
+    navGroup("配置");
     navButton("扩展", icons.plugins, { kind: "plugins" });
     navButton("设置", icons.settings, { kind: "settings" });
     navButton("关于", icons.about, { kind: "about" });
@@ -287,7 +306,7 @@ const navigate = async target => {
     sortKey = "";
     mainContent.scrollTop = 0;
     // Existing items only change state, so the highlight fades between them.
-    sidebarNav.querySelectorAll(".navItem").forEach(button => button.classList.toggle("active", button.navTarget === JSON.stringify(page)));
+    sidebarNav.querySelectorAll(".navItem").forEach(button => button.classList.toggle("active", button.navTarget === activeNavTarget()));
     updateDownloadNav();
     if (page.kind === "home") {
         mainContent.innerHTML = `<div id="rightPlaceholder"><img src="assets/icon-grey.svg"></div>`;
@@ -298,6 +317,7 @@ const navigate = async target => {
     if (page.kind === "search") { renderSearch(); return; }
     if (page.kind === "settings") { await renderSettings(); return; }
     if (page.kind === "plugins") { renderPlugins(); return; }
+    if (page.kind === "plugin") { renderPluginPage(); return; }
     if (page.kind === "downloads") { mainContent.replaceChildren(); renderDownloads(); return; }
     if (page.kind === "playlist") {
         const playlist = catalog.playlists.find(item => item.id === page.id);
@@ -307,7 +327,7 @@ const navigate = async target => {
         return;
     }
     if (page.kind === "menu") {
-        const name = catalog.plugins.find(item => item.manifest.id === page.plugin)?.sidebar?.items?.find(item => item.id === page.id)?.name || "";
+        const name = sidebarEntry(page.plugin, page.id)?.name || "";
         mainContent.innerHTML = pageHeader(name) + emptyState();
         menuOpening++;
         const list = await run("sidebarOpen", { plugin: page.plugin, menu: page.id });
@@ -407,8 +427,9 @@ const dragOnMove = (event, begin) => {
 const moveInList = (list, from, to) => list.splice(to, 0, list.splice(from, 1)[0]);
 // The line under the title belongs to whoever supplies the list: any number of { icon, text } entries, or none.
 const listDetails = details => (details || []).filter(item => item?.text || item?.icon).map(item => `${/^[0-9A-Fa-f]{4,5}$/.test(item.icon || "") ? `${icon(item.icon)} ` : ""}${escapeText(item.text)}`).join("　");
+const trackPageDetails = details => `${listDetails(details) ? `${listDetails(details)}<br>` : ""}<span class="listSummary">${musicListSummary(viewTracks)}</span>`;
 const renderTrackPage = (title, details) => {
-    mainContent.innerHTML = `<div id="musicListContainer"><div class="playlistHeader"><img src="${coverUrl(viewTracks[0])}"><section><h1>${escapeText(title)}</h1><div class="details">${listDetails(details) ? `${listDetails(details)}<br>` : ""}<span class="listSummary">${musicListSummary(viewTracks)}</span></div><div class="buttonGroup"><button id="playAllButton">${icon("F508")} 全部播放</button><button id="appendAllButton" class="sub squareButton" title="添加到播放列表">${icon("F00F")}</button></div></section></div><div class="tableContainer"><div id="trackList"></div></div>${catalog.config["list.showLocate"] ? `<button id="locateButton" class="iconButton locateButton inactive" title="定位当前曲目">${icon("F3B5")}</button>` : ""}</div>`;
+    mainContent.innerHTML = `<div id="musicListContainer"><div class="playlistHeader"><img src="${coverUrl(viewTracks[0])}"><section><h1>${escapeText(title)}</h1><div class="details">${trackPageDetails(details)}</div><div class="buttonGroup"><button id="playAllButton">${icon("F508")} 全部播放</button><button id="appendAllButton" class="sub squareButton" title="添加到播放列表">${icon("F00F")}</button></div></section></div><div class="tableContainer"><div id="trackList"></div></div>${catalog.config["list.showLocate"] ? `<button id="locateButton" class="iconButton locateButton inactive" title="定位当前曲目">${icon("F3B5")}</button>` : ""}</div>`;
     playAllButton.disabled = appendAllButton.disabled = !viewTracks.length;
     playAllButton.onclick = () => run("play", { tracks: viewTracks, index: 0 });
     appendAllButton.onclick = () => run("appendQueue", { tracks: viewTracks });
@@ -418,6 +439,49 @@ const renderTrackPage = (title, details) => {
     }
     locateUsed = false;
     renderTable();
+};
+// The list shown changed: songs added, removed or moved. The page stays where it is scrolled; songs that
+// leave fade out first, then the others slide to their new places and new ones fade in.
+let listUpdateToken = 0;
+let listMoving = 0;
+const updateTrackPage = async (tracks, title, details) => {
+    if (!window.trackList || !mainContent.querySelector(".playlistHeader")) return;
+    const token = ++listUpdateToken;
+    const generation = pageGeneration;
+    const keys = new Set(tracks.map(trackKey));
+    const leaving = [...trackList.querySelectorAll(".trackRow")].filter(row => !keys.has(trackKey(tableTracks[Number(row.dataset.row)])));
+    if (leaving.length) {
+        leaving.forEach(row => row.classList.add("trackLeaving"));
+        await new Promise(resolve => setTimeout(resolve, 150));
+        if (token !== listUpdateToken || generation !== pageGeneration) return;
+    }
+    songInfo.hydrate(tracks);
+    viewTracks = tracks;
+    selectedKeys.forEach(key => { if (!keys.has(key)) selectedKeys.delete(key); });
+    const header = mainContent.querySelector(".playlistHeader");
+    header.querySelector("h1").textContent = title;
+    header.querySelector(".details").innerHTML = trackPageDetails(details);
+    if (header.firstElementChild.getAttribute("src") !== coverUrl(viewTracks[0])) header.firstElementChild.src = coverUrl(viewTracks[0]);
+    playAllButton.disabled = appendAllButton.disabled = !viewTracks.length;
+    refreshTable(true);
+};
+// The playlist shown follows the catalog: a change of its songs or its name is applied in place.
+const syncPlaylistPage = () => {
+    const playlist = catalog.playlists.find(item => item.id === page.id);
+    if (!playlist) { navigate({ kind: "home" }); return; }
+    const tracks = playlist.tracks || [];
+    const shown = mainContent.querySelector(".playlistHeader h1")?.textContent;
+    if (shown === playlist.name && tracks.map(trackKey).join("\n") === viewTracks.map(trackKey).join("\n")) return;
+    updateTrackPage(tracks, playlist.name);
+};
+// The entry of an extension shown is opened again: its new list replaces the old one in place.
+const reloadMenuPage = async () => {
+    const target = page;
+    menuOpening++;
+    const list = await run("sidebarOpen", { plugin: target.plugin, menu: target.id });
+    menuOpening--;
+    if (page !== target || list?.panel || !list?.tracks) return;
+    updateTrackPage(list.tracks, list.title || sidebarEntry(target.plugin, target.id)?.name || "", list.details);
 };
 const orderedTracks = () => sortKey ? [...viewTracks].sort((a, b) => sortDirection * (sortKey === "duration" ? a.duration - b.duration : String(a[sortKey]).localeCompare(String(b[sortKey]), "zh-CN"))) : viewTracks;
 const renderTable = () => {
@@ -441,6 +505,31 @@ const renderTable = () => {
     renderVisibleTracks();
     updateLocator();
 };
+// The rows are drawn again for the songs listed now, where the list is scrolled. Animated, the rows that
+// were on screen slide over from where they were, and songs new to the list fade in.
+const refreshTable = animate => {
+    const body = trackList.querySelector("tbody");
+    if (!viewTracks.length || !body) { renderTable(); return; }
+    const known = new Set(tableTracks.map(trackKey));
+    const places = new Map([...body.querySelectorAll(".trackRow")].map(row => [trackKey(tableTracks[Number(row.dataset.row)]), row.getBoundingClientRect().top]));
+    tableTracks = orderedTracks();
+    tableStart = -1;
+    renderVisibleTracks(true);
+    updateLocator();
+    if (!animate) return;
+    body.querySelectorAll(".trackRow").forEach(row => {
+        const key = trackKey(tableTracks[Number(row.dataset.row)]);
+        if (!known.has(key)) { row.classList.add("trackEntering"); return; }
+        const shift = places.has(key) ? places.get(key) - row.getBoundingClientRect().top : 0;
+        if (!shift) return;
+        const style = simCss(row);
+        style.transform = `translateY(${shift}px)`;
+        row.getBoundingClientRect();
+        row.classList.add("trackMoving");
+        style.removeProperty("transform");
+        setTimeout(() => row.classList.remove("trackMoving"), 250);
+    });
+};
 const highlightRow = (row, track) => {
     if (!highlightRegex) return;
     const cells = row.children;
@@ -448,7 +537,8 @@ const highlightRow = (row, track) => {
     if (!cells[2].classList.contains("unknownArtist")) setCellText(cells[2], track.artist);
     setCellText(cells[3], track.album);
 };
-const renderVisibleTracks = () => {
+// Rows are kept by position while scrolling; rebuild draws every row again after the list changed.
+const renderVisibleTracks = (rebuild = false) => {
     const body = window.trackList?.querySelector("tbody");
     if (!body || !tableTracks.length) return;
     const scroller = trackList.parentElement;
@@ -461,7 +551,7 @@ const renderVisibleTracks = () => {
     const rows = new Map();
     body.querySelectorAll(".trackRow").forEach(row => {
         const index = Number(row.dataset.row);
-        if (index < start || index >= end) row.remove();
+        if (rebuild || index < start || index >= end) row.remove();
         else rows.set(index, row);
     });
     const spacers = trackList.querySelectorAll(".trackSpacer td");
@@ -495,13 +585,23 @@ const renderVisibleTracks = () => {
             dragOnMove(event, () => startDragSort({
                 event, element: row, index: position, count: tableTracks.length, scroller: trackList.parentElement, step: 49, edges: [180, 80],
                 items: () => [...trackList.querySelectorAll(".trackRow")].map(node => [node, Number(node.dataset.row)]),
-                commit: (from, to) => { moveInList(viewTracks, from, to); renderTable(); run("movePlaylist", { id: page.id, index: from, to }); }
+                commit: async (from, to) => {
+                    // The catalog read meanwhile still has the old order; the list is compared again once the move is saved.
+                    const shown = page;
+                    moveInList(viewTracks, from, to);
+                    refreshTable(false);
+                    listMoving++;
+                    await run("movePlaylist", { id: page.id, index: from, to });
+                    listMoving--;
+                    await refreshCatalog();
+                    if (page === shown) syncPlaylistPage();
+                }
             }));
         };
         row.oncontextmenu = event => {
             event.preventDefault();
             if (!selectedKeys.has(trackKey(track))) { selectedKeys.clear(); selectedKeys.add(trackKey(track)); updateRowStates(); }
-            showTrackContext(viewTracks.filter(item => selectedKeys.has(trackKey(item))), event.clientX, event.clientY);
+            showTrackContext(viewTracks.filter(item => selectedKeys.has(trackKey(item))));
         };
         anchor = row.nextSibling;
     });
@@ -545,7 +645,8 @@ const locateCurrent = () => {
     }, 50);
 };
 // Menus are drawn by the host as windows above this one: they fade and cast their shadow whatever is
-// beneath them, the play page included. The rows are described once; what a row does stays here, and
+// beneath them, the play page included, and open where the pointer is. The rows are described once; what
+// a row does stays here, and
 // the rows of a row that reads them when opened are sent when the host asks.
 let shownMenu = null;
 let menuSerial = 0;
@@ -554,9 +655,9 @@ const menuRows = items => shownRows(items).map(item => item.separator ? { separa
 // The rows as they were sent: a path counts the rows shown, without the separators left out.
 const shownRows = items => (items || []).filter((item, index, list) => !item.separator || index > 0 && index < list.length - 1 && !list[index - 1].separator && list.slice(index + 1).some(later => !later.separator));
 const menuRow = path => path.reduce((row, index) => shownRows(row.loaded || row.children)[index], { children: shownMenu.items });
-const showContext = (items, x, y) => {
+const showContext = items => {
     shownMenu = { id: ++menuSerial, items };
-    api("menu", { value: { id: shownMenu.id, x, y, items: menuRows(items) } }).catch(() => {});
+    api("menu", { value: { id: shownMenu.id, items: menuRows(items) } }).catch(() => {});
 };
 const handleMenuEvent = async request => {
     if (!shownMenu || request.menu !== shownMenu.id) return;
@@ -630,14 +731,13 @@ const playlistActions = tracks => [
             if (included) await run("removePlaylist", { id: playlist.id, tracks });
             else { const count = await run("addPlaylist", { id: playlist.id, tracks }); if (count !== null) su5.toast(`已添加 ${count} 首曲目`); }
             await refreshCatalog();
-            if (page.kind === "playlist" && page.id === playlist.id) navigate(page);
         } };
     }),
     { separator: true },
-    { label: "新建歌单", icon: "EA13", action: async () => { const id = await createPlaylist(); if (id) { await run("addPlaylist", { id, tracks }); await refreshCatalog(); navigate({ kind: "playlist", id }); } } }
+    { label: "新建歌单", icon: "EA13", action: async () => { const id = await createPlaylist(); if (id) { await run("addPlaylist", { id, tracks }); await refreshCatalog(); } } }
 ];
 let trackContextGeneration = 0;
-const showTrackContext = async (tracks, x, y, scene = "list") => {
+const showTrackContext = async (tracks, scene = "list") => {
     if (!tracks.length) return;
     const generation = ++trackContextGeneration;
     // Entries that would change nothing are left out: the playing song is not offered "play",
@@ -658,15 +758,16 @@ const showTrackContext = async (tracks, x, y, scene = "list") => {
         { label: "均衡器…", icon: "EC9D", action: showEqualizer },
         { label: "输出设备", icon: "F2A2", children: async () => (await outputDevices()).map(({ value, label }) => ({ label, icon: (catalog.config["audio.device"] || "") === value ? "EB7B" : "", action: () => setConfig("audio.device", value) })) },
         { label: "清空播放列表", icon: "EC2A", action: async () => { if (await su5.dialog.confirm("清空播放队列？")) await run("clearQueue"); } },
-        { label: "停止播放", icon: "F1A1", action: () => run("stop") }
+        { label: "停止播放", icon: "F1A1", action: () => run("stop") },
+        { label: "播放页样式", icon: "F2C4", action: () => showPlayPages() }
     );
-    if (scene === "list" && page.kind === "playlist") items.push({ label: "从歌单移除", icon: "EC2A", action: async () => { await run("removePlaylist", { id: page.id, tracks }); await refreshCatalog(); navigate(page); } });
+    if (scene === "list" && page.kind === "playlist") items.push({ label: "从歌单移除", icon: "EC2A", action: async () => { await run("removePlaylist", { id: page.id, tracks }); await refreshCatalog(); } });
     const pluginItems = actions => (actions || []).map(action => ({ label: action.label, icon: action.icon, children: action.dynamic ? async () => pluginItems(await api("trackActions", { tracks, scene, parent: action.key })) : action.children?.length ? pluginItems(action.children) : null, action: () => run("trackAction", { tracks, scene, key: action.key }) }));
     const actions = await run("trackActions", { tracks, scene });
     if (generation !== trackContextGeneration) return;
     if (actions?.length) items.push({ separator: true }, ...pluginItems(actions));
     items.push({ separator: true }, { label: "刷新索引缓存", icon: "ED0F", action: () => clearSongInfo(tracks, scene) });
-    showContext(items, x, y);
+    showContext(items);
 };
 
 // 2024 naturalSplit: the browser's word segmenter. Extensions get these next to the raw text.
@@ -697,11 +798,17 @@ const submitSearch = async () => {
     searchState.tracks = tracks || [];
     if (page.kind === "search") showSearchResults();
 };
-// 2024: the words of the search text are marked in the result rows. Latin words shorter than
-// three letters only match as whole words; marks separated by one space join into one.
+// 2024: the words of the search text are marked in the result rows. A word in an alphabet (Latin,
+// Cyrillic, Greek, digits) only matches as a whole word: "never" is not marked inside "Whenever".
+// Other text (Chinese and the like) matches anywhere; marks separated by one space join into one.
 const highlightPattern = text => {
-    const words = splitWords(text).map(word => word.length < 3 && /^[A-Za-z]+$/.test(word) ? `\\b${word}\\b` : word.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&"));
-    return words.length ? new RegExp(`(?:${words.join("|")})(?: (?:${words.join("|")}))*`, "gi") : null;
+    const letter = "[\\p{Script=Latin}\\p{Script=Cyrillic}\\p{Script=Greek}\\p{N}]";
+    const alphabetic = new RegExp(`^(?:${letter}|['’-])+$`, "u");
+    const words = splitWords(text).map(word => {
+        const escaped = word.replace(/[\/\\^$*+?.()|[\]{}]/g, "\\$&");
+        return alphabetic.test(word) ? `(?<!${letter})${escaped}(?!${letter})` : escaped;
+    });
+    return words.length ? new RegExp(`(?:${words.join("|")})(?: (?:${words.join("|")}))*`, "giu") : null;
 };
 const setCellText = (cell, text) => {
     cell.textContent = text;
@@ -871,6 +978,8 @@ const renderSettings = async () => {
     const generation = pageGeneration;
     mainContent.innerHTML = pageHeader("软件设置", "", icons.settings) + `<div class="pageBody" id="settingsBody"></div>`;
     settingGroups.forEach(([title, items]) => appendSettingsSection(title, items.map(settingItem), catalog.config, settingsBody));
+    // Rows that depend on a switch that is off are folded before the page is first drawn.
+    updateSettingDependencies(false);
     const fontRow = () => settingsBody.querySelector('[data-setting-key="general.font"]');
     if (knownOptions["general.font"]) previewFonts(fontRow());
     Object.entries(listedOptions).forEach(async ([key, read]) => {
@@ -889,7 +998,6 @@ const renderSettings = async () => {
         const items = (data?.sections || []).flatMap(section => section.items || []);
         if (items.length) appendSettingsSection(`扩展：${plugin.manifest.name}`, items, data.values, settingsBody, plugin.manifest.id);
     }
-    updateSettingDependencies(false);
 };
 // A dependent row folds in and out. Its height is animated between measured pixel values,
 // and it only clips while moving so an open dropdown is never cut off at rest.
@@ -1078,7 +1186,7 @@ const confirmInstall = async (manifest, development = false) => {
     await refreshCatalog();
 };
 // Files dropped on the window. The page cannot read their paths; the host reported them to the core when
-// the drag entered, so the drop only says which page it landed on. A .simex opens the installer, a folder
+// the drag entered, so the drop only says which page it landed on. Each .simex opens the installer in turn, a folder
 // becomes a local directory, and audio files join the playlist or local directory being viewed.
 document.addEventListener("dragover", event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); });
 document.addEventListener("drop", async event => {
@@ -1087,72 +1195,246 @@ document.addEventListener("drop", async event => {
     if (dialogOpen()) return;
     const target = page;
     const result = await run("dropFiles", { text: target.kind, plugin: target.plugin || "", id: target.id || "" });
-    if (result?.refresh) { await refreshCatalog(); if (page === target) navigate(target); }
-    if (result?.install) confirmInstall(result.install);
+    // A playlist follows the catalog by itself; a local directory is read again.
+    if (result?.refresh) { await refreshCatalog(); if (page === target && page.kind === "menu") reloadMenuPage(); }
+    if (result?.packages) installDropped(result.packages);
 });
+// Several packages dropped at once are offered one after another, each in its own installer.
+// A new drop replaces the packages still waiting; the line that is running takes them on.
+let droppedWaiting = 0;
+let installingDropped = false;
+const installDropped = async count => {
+    droppedWaiting = count;
+    if (installingDropped) return;
+    installingDropped = true;
+    try {
+        while (droppedWaiting > 0) {
+            droppedWaiting--;
+            let manifest;
+            try { manifest = await api("nextDroppedPackage"); }
+            catch (error) { await showError("操作失败", error); continue; }
+            if (!manifest) return;
+            await confirmInstall(manifest);
+        }
+    } finally { installingDropped = false; }
+};
+// The page is drawn once; after that the cards follow the catalog in place, so the list keeps where it is
+// scrolled. Cards that leave fold away, the others slide to their new places and new ones fade in.
 const renderPlugins = () => {
-    mainContent.innerHTML = pageHeader("扩展程序", "", icons.plugins) + `<div class="pageBody pluginBody"><div class="pluginInstall"><div><span>安装扩展</span><p>选择 .simex 扩展包。</p></div><button id="pluginFolderButton" class="iconButton" title="打开扩展目录">${icon("ED6A")}</button><button id="loadPluginFolderButton" class="sub">从文件夹加载</button><button id="installPluginButton">安装扩展</button><input id="pluginPackageInput" type="file" accept=".simex" hidden></div><div id="pluginCards"></div></div>`;
-    pluginFolderButton.onclick = () => run("pluginFolder");
-    installPluginButton.onclick = () => pluginPackageInput.click();
-    pluginPackageInput.onchange = async () => {
-        const file = pluginPackageInput.files[0];
-        if (!file) return;
-        try {
-            const response = await fetch("extensionPackage", { method: "POST", body: file });
-            const payload = await response.json();
-            if (!response.ok) throw new Error(payload.error);
-            await confirmInstall(payload.result);
-        } catch (error) { showAlert(error.message); }
-        if (window.pluginPackageInput) pluginPackageInput.value = "";
-    };
-    loadPluginFolderButton.onclick = async () => confirmInstall(await run("prepareInstall"), true);
-    catalog.plugins.forEach(plugin => {
-        const manifest = plugin.manifest;
-        const card = document.createElement("div");
-        card.className = "pluginCard";
-        card.dataset.plugin = manifest.id;
-        card.innerHTML = `<div class="pluginDetails"><h2>${escapeText(manifest.name)}${plugin.builtin ? `<span class="badge">内置</span>` : ""}${plugin.development ? `<span class="badge">开发</span>` : ""}${!plugin.running ? `<span class="badge">${plugin.enabled ? "加载失败" : "已停用"}</span>` : ""}</h2><div class="pluginMeta">${escapeText(manifest.id)} · ${escapeText(manifest.version)}${manifest.author ? ` · ${escapeText(manifest.author)}` : ""}</div><p>${escapeText(manifest.description)}</p>${plugin.error ? `<p class="pluginError">${escapeText(plugin.error)}</p>` : ""}</div><div class="pluginTools"></div>`;
-        const tools = card.lastElementChild;
-        const handle = document.createElement("button");
-        handle.className = "iconButton pluginDragHandle";
-        handle.textContent = "⋮⋮";
-        handle.title = "拖动调整扩展加载顺序";
-        handle.onpointerdown = event => {
-            if (event.button !== 0) return;
-            event.preventDefault();
-            const cards = [...pluginCards.children];
-            startDragSort({
-                event, element: card, index: cards.indexOf(card), count: cards.length, scroller: pluginCards.closest(".pageBody"), step: card.offsetHeight + 5, edges: [70, 80],
-                items: () => [...pluginCards.children].map((node, position) => [node, position]),
-                commit: async (from, to) => {
-                    const order = catalog.plugins.map(item => item.manifest.id);
-                    moveInList(order, from, to);
-                    pluginCards.insertBefore(card, pluginCards.children[to + (to > from)] || null);
-                    await run("pluginOrder", { order });
-                    await refreshCatalog();
-                    if (page.kind === "plugins") renderPlugins();
-                }
-            });
+    const fresh = !window.pluginCards;
+    if (fresh) {
+        mainContent.innerHTML = pageHeader("扩展程序", "", icons.plugins) + `<div class="pageBody pluginBody"><div class="pluginInstall"><div><span>安装扩展</span></div><button id="pluginFolderButton" class="iconButton" title="打开扩展目录">${icon("ED6A")}</button><button id="loadPluginFolderButton" class="sub">从文件夹加载</button><button id="installPluginButton">安装扩展</button><input id="pluginPackageInput" type="file" accept=".simex" multiple hidden></div><div id="pluginCards"></div></div>`;
+        pluginFolderButton.onclick = () => run("pluginFolder");
+        installPluginButton.onclick = () => pluginPackageInput.click();
+        // Several packages chosen at once are offered one after another.
+        pluginPackageInput.onchange = async () => {
+            const files = [...pluginPackageInput.files];
+            pluginPackageInput.value = "";
+            for (const file of files) {
+                try {
+                    const response = await fetch("extensionPackage", { method: "POST", body: file });
+                    const payload = await response.json();
+                    if (!response.ok) throw new Error(payload.error);
+                    await confirmInstall(payload.result);
+                } catch (error) { await showAlert(error.message); }
+            }
         };
-        card.prepend(handle);
-        tools.append(makeToggle(`启用${manifest.name}`, plugin.enabled, async value => { await run("pluginEnabled", { plugin: manifest.id, value }); await refreshCatalog(); }));
-        const more = document.createElement("button");
-        more.className = "iconButton";
-        more.title = `${manifest.name} · 更多操作`;
-
-        more.innerHTML = icon("EF77");
-        more.onclick = event => {
-            const items = [
-                { label: "权限管理", icon: "F0EE", action: () => showPluginPermissions(manifest) },
-                { label: "查看日志", icon: "ECEF", action: () => showPluginLogs(manifest) },
-                { label: "重新加载", icon: "F080", action: async () => { await run("reloadPlugin", { plugin: manifest.id }); await refreshCatalog(); } }
-            ];
-            if (!plugin.builtin) items.push({ label: "移除扩展", icon: "EC2A", action: async () => { if (await su5.dialog.confirm(`移除「${manifest.name}」？`)) { await run("removePlugin", { plugin: manifest.id }); await refreshCatalog(); } } });
-            showContext(items, event.clientX, event.clientY);
-        };
-        tools.append(more);
-        pluginCards.append(card);
+        loadPluginFolderButton.onclick = async () => confirmInstall(await run("prepareInstall"), true);
+    }
+    const shownCards = () => [...pluginCards.querySelectorAll(".pluginCard:not(.pluginLeaving)")];
+    const cards = new Map(shownCards().map(card => [card.dataset.plugin, card]));
+    const places = new Map([...cards].map(([id, card]) => [id, card.getBoundingClientRect().top]));
+    const ids = new Set(catalog.plugins.map(plugin => plugin.manifest.id));
+    cards.forEach((card, id) => { if (!ids.has(id)) removePluginCard(card); });
+    const ordered = catalog.plugins.map(plugin => {
+        let card = cards.get(plugin.manifest.id);
+        if (!card) {
+            card = createPluginCard(plugin.manifest.id);
+            if (!fresh) card.classList.add("pluginEntering");
+        }
+        fillPluginCard(card, plugin);
+        return card;
     });
+    const current = shownCards();
+    if (ordered.some((card, index) => current[index] !== card)) pluginCards.append(...ordered);
+    ordered.forEach(card => {
+        const shift = places.has(card.dataset.plugin) ? places.get(card.dataset.plugin) - card.getBoundingClientRect().top : 0;
+        if (!shift) return;
+        const style = simCss(card);
+        style.transform = `translateY(${shift}px)`;
+        card.getBoundingClientRect();
+        card.classList.add("pluginMoving");
+        style.removeProperty("transform");
+        setTimeout(() => card.classList.remove("pluginMoving"), 250);
+    });
+};
+const removePluginCard = card => {
+    const style = simCss(card);
+    card.classList.add("pluginLeaving");
+    style.height = `${card.offsetHeight}px`;
+    card.getBoundingClientRect();
+    card.classList.add("pluginCollapsing");
+    style.height = "0px";
+    setTimeout(() => card.remove(), 250);
+};
+const createPluginCard = id => {
+    const card = document.createElement("div");
+    card.className = "pluginCard";
+    card.dataset.plugin = id;
+    card.innerHTML = `<div class="pluginDetails"></div><div class="pluginTools"></div>`;
+    const tools = card.lastElementChild;
+    const handle = document.createElement("button");
+    handle.className = "iconButton pluginDragHandle";
+    handle.textContent = "⋮⋮";
+    handle.title = "拖动调整扩展加载顺序";
+    handle.onpointerdown = event => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        const cards = [...pluginCards.querySelectorAll(".pluginCard:not(.pluginLeaving)")];
+        startDragSort({
+            event, element: card, index: cards.indexOf(card), count: cards.length, scroller: pluginCards.closest(".pageBody"), step: card.offsetHeight + 5, edges: [70, 80],
+            items: () => cards.map((node, position) => [node, position]),
+            commit: async (from, to) => {
+                const order = catalog.plugins.map(item => item.manifest.id);
+                moveInList(order, from, to);
+                pluginCards.insertBefore(card, cards[to + (to > from)] || null);
+                await run("pluginOrder", { order });
+                await refreshCatalog();
+                if (page.kind === "plugins") renderPlugins();
+            }
+        });
+    };
+    card.prepend(handle);
+    tools.append(makeToggle("", false, async value => { await run("pluginEnabled", { plugin: id, value }); await refreshCatalog(); }));
+    // Everything else about one extension is on a page of its own.
+    const details = document.createElement("button");
+    details.className = "iconButton";
+    details.innerHTML = icon("EA6E");
+    details.onclick = () => navigate({ kind: "plugin", plugin: id });
+    tools.append(details);
+    card.querySelector(".pluginDetails").onclick = () => navigate({ kind: "plugin", plugin: id });
+    return card;
+};
+// A card is written again only when what it shows changed; the switch only follows a change made elsewhere.
+const fillPluginCard = (card, plugin) => {
+    const manifest = plugin.manifest;
+    const state = pluginState(plugin);
+    if (card.pluginState !== state) {
+        card.pluginState = state;
+        card.querySelector(".pluginDetails").innerHTML = `<h2>${escapeText(manifest.name)}${plugin.builtin ? `<span class="badge">内置</span>` : ""}${plugin.development ? `<span class="badge">开发</span>` : ""}${!plugin.running ? `<span class="badge">${plugin.enabled ? "加载失败" : "已停用"}</span>` : ""}</h2><div class="pluginMeta">${escapeText(manifest.id)} · ${escapeText(manifest.version)}${manifest.author ? ` · ${escapeText(manifest.author)}` : ""}</div><p>${escapeText(manifest.description)}</p>${plugin.error ? `<p class="pluginError">${escapeText(plugin.error)}</p>` : ""}`;
+        card.querySelector(".pluginTools > .iconButton").title = `${manifest.name} · 详情`;
+    }
+    const toggle = card.querySelector(".toggleControl");
+    const input = toggle.querySelector("input");
+    if (input.checked !== plugin.enabled) { input.checked = plugin.enabled; toggle.classList.toggle("on", plugin.enabled); }
+};
+// One extension on one page, as a browser's extension page has it: whether it is enabled, what it is and
+// how it fares, its permissions, its settings, its log, and reloading or removing it.
+const pluginState = plugin => JSON.stringify([plugin.manifest, plugin.enabled, plugin.running, plugin.error, plugin.builtin, plugin.development]);
+let pluginPageState = "";
+let pluginLogTimer;
+const renderPluginPage = async () => {
+    const generation = pageGeneration;
+    const plugin = catalog.plugins.find(item => item.manifest.id === page.plugin);
+    if (!plugin) { navigate({ kind: "plugins" }); return; }
+    const manifest = plugin.manifest;
+    const scroll = window.pluginPageBody?.scrollTop || 0;
+    pluginPageState = pluginState(plugin);
+    mainContent.innerHTML = `<div class="pageHeader pluginPageHeader"><button id="pluginBackButton" class="iconButton" title="返回扩展列表">${icon("EA64")}</button><div><h1>${escapeText(manifest.name)}</h1></div></div><div class="pageBody" id="pluginPageBody"></div>`;
+    pluginBackButton.onclick = () => navigate({ kind: "plugins" });
+    const section = (title, ...nodes) => {
+        const node = document.createElement("section");
+        node.className = "settingsSection";
+        const heading = document.createElement("h3");
+        heading.textContent = title;
+        node.append(heading, ...nodes);
+        pluginPageBody.append(node);
+        return node;
+    };
+    const card = () => { const node = document.createElement("div"); node.className = "settingsCard"; return node; };
+    const row = (label, desc, control) => {
+        const node = document.createElement("div");
+        node.className = "settingRow";
+        node.innerHTML = `<div class="settingText"><span>${escapeText(label)}</span>${desc ? `<p>${escapeText(desc)}</p>` : ""}</div><div class="settingControl"></div>`;
+        if (control) node.lastElementChild.append(control);
+        return node;
+    };
+    const button = (label, action, quiet = true) => { const node = document.createElement("button"); if (quiet) node.className = "sub"; node.textContent = label; node.onclick = action; return node; };
+
+    // What it is, and whether it runs.
+    const overview = card();
+    const state = !plugin.enabled ? "已停用" : plugin.running ? "正在运行" : "加载失败";
+    overview.append(row("启用扩展", state, makeToggle(`启用${manifest.name}`, plugin.enabled, async value => { await run("pluginEnabled", { plugin: manifest.id, value }); await refreshCatalog(); })));
+    const about = row(manifest.name, manifest.description);
+    about.querySelector(".settingText span").insertAdjacentHTML("afterend", `${plugin.builtin ? `<span class="badge">内置</span>` : ""}${plugin.development ? `<span class="badge">开发</span>` : ""}`);
+    about.querySelector(".settingText").insertAdjacentHTML("beforeend", `<div class="pluginMeta">${escapeText([manifest.id, manifest.version, manifest.author].filter(Boolean).join(" · "))}</div>${plugin.error ? `<p class="pluginError">${escapeText(plugin.error)}</p>` : ""}`);
+    overview.append(about);
+    section("概览", overview);
+
+    // Permissions: the ones the extension declares; entries of the song-menu permission follow it, indented.
+    const permissions = await run("pluginPermissions", { plugin: manifest.id });
+    if (generation !== pageGeneration) return;
+    const list = document.createElement("div");
+    list.className = "permissionList";
+    const permissionRow = (label, desc, granted, action, key, child) => {
+        const node = document.createElement("div");
+        node.className = child ? "permissionRow childPermission" : "permissionRow";
+        node.innerHTML = `<div><span>${escapeText(label)}</span><p>${escapeText(desc)}</p></div>`;
+        node.append(makeToggle(label, granted, async value => { await run(action, { plugin: manifest.id, key, value }); await refreshCatalog(); }));
+        list.append(node);
+    };
+    (permissions || []).forEach(permission => {
+        const info = permission.info;
+        permissionRow(info.Name, info.Desc, permission.granted, "pluginPermission", info.Key);
+        (permission.menus || []).forEach(menu => permissionRow(menu.label, (menu.scenes || ["list", "play", "queue"]).map(scene => ({ list: "歌曲列表", play: "播放详情", queue: "播放队列" }[scene] || scene)).join("、"), menu.granted, "trackMenuPermission", menu.key, true));
+    });
+    if (!permissions?.length) list.innerHTML = `<div class="permissionRow"><div><p>此扩展未声明任何权限，仅能访问自身的数据目录。</p></div></div>`;
+    section("权限", list);
+
+    // Its settings, under the title the host gives every extension's settings.
+    if (plugin.running) {
+        const data = await run("pluginSettings", { plugin: manifest.id });
+        if (generation !== pageGeneration) return;
+        const items = (data?.sections || []).flatMap(part => part.items || []);
+        if (items.length) appendSettingsSection(`扩展：${manifest.name}`, items, data.values, pluginPageBody, manifest.id);
+    }
+
+    // The log is read again while the page is shown; it stays at its end unless the user scrolled up.
+    const log = document.createElement("pre");
+    log.className = "logView";
+    const readLog = async () => {
+        const lines = await api("pluginLogs", { plugin: manifest.id }).catch(() => null);
+        if (generation !== pageGeneration) { clearInterval(pluginLogTimer); return; }
+        const text = (lines || []).join("\n") || "暂无日志";
+        if (text === log.textContent) return;
+        const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+        log.textContent = text;
+        if (atEnd) log.scrollTop = log.scrollHeight;
+    };
+    section("日志", log);
+    clearInterval(pluginLogTimer);
+    pluginLogTimer = setInterval(readLog, 2000);
+    await readLog();
+    if (generation !== pageGeneration) return;
+
+    const actions = card();
+    actions.append(row("重新加载", "", button("重新加载", async () => { await run("reloadPlugin", { plugin: manifest.id }); await refreshCatalog(); })));
+    if (!plugin.builtin) actions.append(row("移除扩展", plugin.development ? "只解除对源文件夹的引用，不删除其中的文件。" : "", button("移除", async () => {
+        if (!await su5.dialog.confirm(`移除「${manifest.name}」？`)) return;
+        await run("removePlugin", { plugin: manifest.id });
+        await refreshCatalog();
+        if (page.kind === "plugin" && page.plugin === manifest.id) navigate({ kind: "plugins" });
+    })));
+    section("操作", actions);
+    pluginPageBody.scrollTop = scroll;
+};
+// The catalog changed while the page of an extension is shown: it is drawn again when the extension itself
+// changed (enabled, running, reloaded with another manifest), and left when the extension is gone. A
+// permission switched on this page changes neither, so the page does not move under the pointer.
+const syncPluginPage = () => {
+    const plugin = catalog.plugins.find(item => item.manifest.id === page.plugin);
+    if (!plugin) { navigate({ kind: "plugins" }); return; }
+    if (pluginState(plugin) !== pluginPageState) renderPluginPage();
 };
 const dialogFooter = (id, content, label = "完成") => {
     const footer = document.createElement("div");
@@ -1162,17 +1444,6 @@ const dialogFooter = (id, content, label = "完成") => {
     button.onclick = () => su5.dialog.show(id, false);
     footer.append(button);
     content.append(footer);
-};
-const showPluginLogs = async manifest => {
-    const logs = await run("pluginLogs", { plugin: manifest.id });
-    const { id, content } = su5.dialog.create("扩展日志", manifest.name);
-    content.closest("dialog").classList.add("wideDialog");
-    const pre = document.createElement("pre");
-    pre.className = "logView";
-    pre.textContent = (logs || []).join("\n") || "暂无日志";
-    content.append(pre);
-    dialogFooter(id, content, "关闭");
-    su5.dialog.show(id);
 };
 // 2024 download page: one row per task, the progress as a bar behind the row, the status as an
 // icon and a line of text, and the row's own buttons. Rows are kept and updated in place so the
@@ -1217,7 +1488,7 @@ const showInstaller = (manifest, development) => new Promise(resolve => {
     content.closest("dialog").classList.add("installDialog");
     const permissions = manifest.permissionList || [];
     const denied = new Set();
-    content.innerHTML = `<div class="installHeader"><div><div class="installName">${escapeText(manifest.name || manifest.id)}</div><div class="installMeta">${escapeText([`版本 ${manifest.version || "未知"}`, manifest.author].filter(Boolean).join(" · "))}</div></div></div>${manifest.description ? `<p class="installDesc">${escapeText(manifest.description)}</p>` : ""}<button class="installSummary"><span>权限</span><small></small>${icon("EA6E")}</button><div class="permissionList installPermissions"></div><p class="installNote">${update ? `将替换已安装的 ${escapeText(manifest.installedVersion || "旧")} 版本。` : ""}${development ? "直接加载原文件夹，不复制源文件。" : ""}权限可在安装后随时更改。</p><div class="buttons"><button class="sub cancel">取消</button><button>${update ? "更新" : "安装"}</button></div>`;
+    content.innerHTML = `<div class="installHeader"><div><div class="installName">${escapeText(manifest.name || manifest.id)}</div><div class="installMeta">${escapeText([`版本 ${manifest.version || "未知"}`, manifest.author].filter(Boolean).join(" · "))}</div></div></div>${manifest.description ? `<p class="installDesc">${escapeText(manifest.description)}</p>` : ""}<button class="installSummary"><span>权限</span><small></small>${icon("EA6E")}</button><div class="permissionList installPermissions"></div><p class="installNote">${update ? `将替换已安装的 ${escapeText(manifest.installedVersion || "旧")} 版本。` : ""}${development ? "直接加载原文件夹，不复制源文件。" : ""}${manifest.requestedBy ? `由扩展「${escapeText(manifest.requestedBy)}」请求安装。` : ""}权限可在安装后随时更改。</p><div class="buttons"><button class="sub cancel">取消</button><button>${update ? "更新" : "安装"}</button></div>`;
     const summary = content.querySelector(".installSummary");
     const list = content.querySelector(".installPermissions");
     const sync = () => summary.querySelector("small").textContent = !permissions.length ? "无需任何权限" : denied.size ? `${permissions.length} 项，已关闭 ${denied.size} 项` : `${permissions.length} 项`;
@@ -1264,30 +1535,6 @@ const showPlayPages = async () => {
     dialogFooter(id, content);
     su5.dialog.show(id);
 };
-const showPluginPermissions = async manifest => {
-    const permissions = await run("pluginPermissions", { plugin: manifest.id });
-    const { id, content } = su5.dialog.create("权限管理", manifest.name);
-    content.closest("dialog").classList.add("permissionsDialog");
-    if (!permissions?.length) content.textContent = "此扩展未声明任何权限，仅能访问自身的数据目录。";
-    // One grouped list; entries of the song-menu permission follow it as indented rows.
-    const list = document.createElement("div");
-    list.className = "permissionList";
-    const addRow = (label, desc, granted, action, key, child) => {
-        const row = document.createElement("div");
-        row.className = child ? "permissionRow childPermission" : "permissionRow";
-        row.innerHTML = `<div><span>${escapeText(label)}</span><p>${escapeText(desc)}</p></div>`;
-        row.append(makeToggle(label, granted, async value => { await run(action, { plugin: manifest.id, key, value }); await refreshCatalog(); }));
-        list.append(row);
-    };
-    (permissions || []).forEach(permission => {
-        const info = permission.info;
-        addRow(info.Name, info.Desc, permission.granted, "pluginPermission", info.Key);
-        (permission.menus || []).forEach(menu => addRow(menu.label, (menu.scenes || ["list", "play", "queue"]).map(scene => ({ list: "歌曲列表", play: "播放详情", queue: "播放队列" }[scene] || scene)).join("、"), menu.granted, "trackMenuPermission", menu.key, true));
-    });
-    if (permissions?.length) content.append(list);
-    dialogFooter(id, content);
-    su5.dialog.show(id);
-};
 
 const setPlaySide = (showQueue, showLyrics) => {
     playSide = showQueue ? "queue" : showLyrics ? "lyrics" : "";
@@ -1317,11 +1564,13 @@ const applyPlayTitle = () => {
 const handlePlayRequest = request => {
     if (request.kind === "menu") { handleMenuEvent(request); return; }
     if (request.kind === "lyricsShown") { lyricsShown = !!request.value; return; }
+    // The song menu asked for from outside the window (sim.player.showMenu): the play page need not be open.
+    if (request.kind === "songMenu" && request.scene === "outside") { if (player.Current) showTrackContext([player.Current], "play"); return; }
     if (!externalShown) return;
     if (request.kind === "close") openPlayPage(false);
     if (request.kind === "songMenu") {
         const track = request.scene === "queue" ? player.Queue[request.index] : player.Current;
-        showTrackContext(track ? [track] : [], request.x, request.y, request.scene === "queue" ? "queue" : "play");
+        showTrackContext(track ? [track] : [], request.scene === "queue" ? "queue" : "play");
     }
     if (request.kind === "dialog") ({ equalizer: showEqualizer, sleep: showSleepTimer, speed: showSpeedDialog })[request.name]?.();
     if (request.kind === "titleBar" && catalog.playPage) { Object.assign(catalog.playPage, { background: request.background, dark: request.dark }); applyPlayTitle(); }
@@ -1409,7 +1658,8 @@ const updatePlayer = snapshot => {
     (snapshot.alerts || []).forEach(showAlert);
     (snapshot.musicInvalidations || []).forEach(id => songInfo.invalidate(id));
     // An extension asked for one of its own sidebar entries to be shown.
-    (snapshot.navigations || []).forEach(item => navigate({ kind: "menu", plugin: item.plugin, id: item.id }));
+    // The entry already shown as a list is only read again, so the list keeps its place.
+    (snapshot.navigations || []).forEach(item => page.kind === "menu" && page.plugin === item.plugin && page.id === item.id && !shownPanel && mainContent.querySelector(".playlistHeader") ? reloadMenuPage() : navigate({ kind: "menu", plugin: item.plugin, id: item.id }));
     // A panel opened outside a sidebar click takes the content area; one the extension closed gives it back.
     // A snapshot may predate what a click has just changed, so a difference counts once it is seen twice.
     const livePanel = snapshot.panel?.id || "";
@@ -1419,7 +1669,12 @@ const updatePlayer = snapshot => {
     (snapshot.prompts || []).forEach(async prompt => {
         if (shownPrompts.size) return;
         shownPrompts.add(prompt.id);
-        const text = prompt.kind === "confirm" ? await su5.dialog.confirm(prompt.title) ? "1" : "" : (await su5.dialog.prompt({ title: prompt.title, items: [{ type: "input", name: "value", placeholder: prompt.placeholder, value: prompt.value }] }))?.value || "";
+        let text;
+        if (prompt.kind === "install") {
+            // An extension asks to install a package: the installer shows it and answers with the permissions switched off.
+            const denied = await showInstaller(JSON.parse(prompt.value), false);
+            text = denied ? JSON.stringify(denied) : "";
+        } else text = prompt.kind === "confirm" ? await su5.dialog.confirm(prompt.title) ? "1" : "" : (await su5.dialog.prompt({ title: prompt.title, items: [{ type: "input", name: "value", placeholder: prompt.placeholder, value: prompt.value }] }))?.value || "";
         await run("promptResult", { id: prompt.id, text });
         shownPrompts.delete(prompt.id);
     });
@@ -1567,4 +1822,6 @@ window.simInitialReady = start().catch(() => { mainContent.innerHTML = emptyStat
 const pageToken = crypto.randomUUID();
 const pageLoaded = document.readyState === "complete" ? Promise.resolve() : new Promise(resolve => window.addEventListener("load", resolve, { once: true }));
 Promise.all([pageLoaded, document.fonts.ready, window.simInitialReady]).then(() => api("pageReady", { id: pageToken }));
-window.addEventListener("beforeunload", () => navigator.sendBeacon("api", new Blob([JSON.stringify({ action: "pageLoading", id: pageToken })], { type: "application/json" })));
+// The window waits out a reload hidden. Only a page really being left says so: a navigation that merely starts
+// (a dropped file the drop handler did not take) is refused by the host, and the page would never report ready again.
+window.addEventListener("pagehide", () => navigator.sendBeacon("api", new Blob([JSON.stringify({ action: "pageLoading", id: pageToken })], { type: "application/json" })));

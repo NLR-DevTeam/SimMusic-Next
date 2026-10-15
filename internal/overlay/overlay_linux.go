@@ -89,25 +89,21 @@ func rows(fields []string, parent []int, items []Item) []string {
 	return fields
 }
 
-func (o *Overlay) show(id int, items []Item, screen bool, x, y float64, choose func(path []int)) {
+func (o *Overlay) show(id int, items []Item, choose func(path []int)) {
 	o.mu.Lock()
 	o.menuID, o.items, o.choose, o.open = id, items, choose, true
 	o.mu.Unlock()
-	flag := "0"
-	if screen {
-		flag = "1"
-	}
-	fields := []string{"menu", "show", strconv.Itoa(id), flag, strconv.FormatFloat(x, 'f', 1, 64), strconv.FormatFloat(y, 'f', 1, 64), o.family()}
+	fields := []string{"menu", "show", strconv.Itoa(id), o.family()}
 	o.send(rows(fields, nil, items)...)
 }
 
-// ShowMenu opens a menu at a point of the main window's client area, in CSS pixels.
-func (o *Overlay) ShowMenu(id int, items []Item, x, y float64) { o.show(id, items, false, x, y, nil) }
+// ShowMenu opens a menu of the host page where the pointer is, whether or not the main window is shown.
+func (o *Overlay) ShowMenu(id int, items []Item) { o.show(id, items, nil) }
 
-// ShowMenuAtPointer opens a menu where the pointer is, above every other window and whether or not the main
-// window is shown: the menu of the tray icon. choose is called with the path of the row chosen.
+// ShowMenuAtPointer opens such a menu whose rows act here instead of in the host page:
+// the menu of the tray icon. choose is called with the path of the row chosen.
 func (o *Overlay) ShowMenuAtPointer(items []Item, choose func(path []int)) {
-	o.show(screenMenu, items, true, 0, 0, choose)
+	o.show(screenMenu, items, choose)
 }
 
 // itemAt finds the row a path names.

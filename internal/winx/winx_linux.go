@@ -220,6 +220,7 @@ func IsVisible(hwnd uintptr) bool                      { return hwnd != 0 }
 func ExcludeFromCapture(hwnd uintptr, exclude bool)    {}
 func StyleWindow(hwnd uintptr)                         {}
 func ShowWindowAsync(hwnd uintptr, show bool)          {}
+func AllowForeground()                                 {}
 func FocusContent(hwnd uintptr)                        {}
 func IsIconic(hwnd uintptr) bool                       { return false }
 func IsForegroundUncovered(hwnd, overlay uintptr) bool { return false }

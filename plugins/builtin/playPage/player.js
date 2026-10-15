@@ -215,7 +215,7 @@ const renderQueue = () => {
             }
         }));
         row.querySelector("button").onclick = () => simPlayer.removeFromQueue(index);
-        row.oncontextmenu = event => { event.preventDefault(); simPlayer.showMenu(event.clientX, event.clientY, { scene: "queue", index }); };
+        row.oncontextmenu = event => { event.preventDefault(); simPlayer.showMenu({ scene: "queue", index }); };
         queueTracks.append(row);
     });
     loadVisibleInfo();
@@ -462,8 +462,8 @@ largeToggleButton.onclick = () => simPlayer.toggle();
 largeModeButton.onclick = () => simPlayer.cycleMode();
 largeQueueButton.onclick = () => setPlaySide(document.body.classList.contains("hideList"), false);
 lyricsButton.onclick = () => { lyricsShown = document.body.classList.contains("hideLyrics"); setPlaySide(false, lyricsShown); simPlayer.setLyricsShown(lyricsShown); };
-trackMoreButton.onclick = event => simPlayer.showMenu(event.clientX, event.clientY);
-largeCover.oncontextmenu = event => { event.preventDefault(); simPlayer.showMenu(event.clientX, event.clientY); };
+trackMoreButton.onclick = event => simPlayer.showMenu();
+largeCover.oncontextmenu = event => { event.preventDefault(); simPlayer.showMenu(); };
 document.addEventListener("contextmenu", event => event.preventDefault());
 largeSeekBar.progress.onchange = number => simPlayer.seek(number);
 const sendVolume = queueValue(number => simPlayer.setVolume(number));

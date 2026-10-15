@@ -89,7 +89,7 @@ type Overlay struct {
 
 	menuID     int
 	choose     func(path []int) // set for a menu whose rows act here, not in the host page
-	screen     bool             // the menu belongs to the screen, not to the main window: the tray's
+	screen     bool             // what is being built belongs to the screen, not to the main window: a menu, as against a notice
 	levels     []*level
 	dying      []*level
 	opened     time.Time
@@ -119,13 +119,14 @@ func (o *Overlay) post(job func()) {
 	}
 }
 
-// ShowMenu opens a menu at a point of the main window's client area, in CSS pixels.
-func (o *Overlay) ShowMenu(id int, items []Item, x, y float64) {
-	o.post(func() { o.showMenu(id, items, x, y) })
+// ShowMenu opens a menu of the host page where the pointer is, above every other window and whether or not
+// the main window is shown: a menu may be asked for from outside it (a taskbar widget of an extension).
+func (o *Overlay) ShowMenu(id int, items []Item) {
+	o.post(func() { o.showMenu(id, items) })
 }
 
-// ShowMenuAtPointer opens a menu where the pointer is, above every other window and whether or not the main
-// window is shown: the menu of the tray icon. choose is called with the path of the row chosen.
+// ShowMenuAtPointer opens such a menu whose rows act here instead of in the host page:
+// the menu of the tray icon. choose is called with the path of the row chosen.
 func (o *Overlay) ShowMenuAtPointer(items []Item, choose func(path []int)) {
 	o.post(func() { o.showScreenMenu(items, choose) })
 }

@@ -128,17 +128,28 @@ h3 { font-size: 1em; font-weight: 400; }
 .pluginCard p { opacity: .8; font-size: .9em; margin-top: 3px; }
 .pluginMeta { opacity: .5; font-size: .8em; margin: 3px 0; overflow-wrap: anywhere; }
 .pluginTools { display: flex; align-items: center; gap: 18px; }
-.pluginTools .iconButton, .pluginInstall .iconButton, .pluginDragHandle { width: 30px; height: 30px; border-radius: 5px; opacity: .6; transition: background .2s, opacity .2s; font-size: 18px; }
-.pluginTools .iconButton:hover, .pluginInstall .iconButton:hover, .pluginDragHandle:hover { background: #0000000d; opacity: 1; filter: none; }
+.pluginTools .iconButton, .pluginInstall .iconButton, .pluginPageHeader .iconButton, .pluginDragHandle { width: 30px; height: 30px; border-radius: 5px; opacity: .6; transition: background .2s, opacity .2s; font-size: 18px; }
+.pluginTools .iconButton:hover, .pluginInstall .iconButton:hover, .pluginPageHeader .iconButton:hover, .pluginDragHandle:hover { background: #0000000d; opacity: 1; filter: none; }
 .pluginInstall { display: flex; align-items: center; gap: 10px; padding: 10px 15px; background: white; border-radius: 5px; }
 .pluginInstall > div { flex: 1; }
 .pluginInstall p { font-size: .9em; opacity: .8; margin-top: 3px; }
 #pluginCards { margin-top: 15px; }
+/* The page of one extension: the header carries a way back to the list; the rest is built from the settings and permission rows. */
+.pluginPageHeader .iconButton { margin-right: 8px; }
+#pluginPageBody .logView { max-height: 320px; }
 .dragGhost { position: fixed; z-index: 160; margin: 0; pointer-events: none; background: #fcfcfc; border-radius: 5px; box-shadow: 0 8px 24px #00000024; opacity: .96; }
 .dragSource { opacity: 0; }
 .dragSorting .trackRow, .dragSorting .pluginCard { transition: transform .15s; }
 .dragUp { transform: translateY(calc(-1 * var(--dragStep))); }
 .dragDown { transform: translateY(var(--dragStep)); }
+/* Lists changed in place: what leaves fades or folds away, what moved slides over from its old place, what is new fades in. */
+@keyframes listEnter { from { opacity: 0; } }
+.trackRow.trackLeaving { opacity: 0; pointer-events: none; transition: background .1s, opacity .15s; }
+.trackRow.trackMoving { transition: background .1s, transform .2s; }
+.trackRow.trackEntering, .pluginCard.pluginEntering { animation: listEnter .25s; }
+.pluginCard.pluginMoving { transition: transform .2s; }
+.pluginCard.pluginLeaving { overflow: hidden; pointer-events: none; transition: height .25s, padding .25s, margin .25s, opacity .2s; }
+.pluginCard.pluginCollapsing { opacity: 0; padding-block: 0; margin-bottom: 0; }
 .pluginDragHandle { flex-shrink: 0; letter-spacing: -3px; padding: 0 3px 0 0; font-family: inherit; }
 .eqPresets { display: flex; flex-wrap: wrap; gap: 5px; }
 .aboutPage { position: absolute; inset: 0 0 80px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
@@ -224,7 +235,6 @@ h3 { font-size: 1em; font-weight: 400; }
 .modalContainer > div > .modalContent > form:not(.timerCustom) { display: grid; gap: 8px; }
 .modalContainer > div > .modalContent > form > .input { margin: 0; }
 .modalContainer.wideDialog > div { width: 640px; }
-.modalContainer.permissionsDialog > div { width: 520px; }
 .permissionList { background: white; border-radius: 8px; padding: 0 16px; line-height: normal; }
 .permissionRow { display: flex; align-items: center; gap: 24px; padding: 13px 0; }
 .permissionRow + .permissionRow { border-top: 1px solid #0000000d; }

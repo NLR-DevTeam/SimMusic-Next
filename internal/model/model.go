@@ -3,7 +3,7 @@ package model
 
 // Track 是一首曲目的描述，由音源插件提供。
 type Track struct {
-	Source             string            `json:"source"`   // 已注册的 scheme，旧扩展默认使用插件 ID
+	Source             string            `json:"source"`   // 已注册的 scheme
 	ID                 string            `json:"id"`       // 插件内唯一 ID
 	Title              string            `json:"title"`    // 标题
 	Artist             string            `json:"artist"`   // 艺术家
@@ -31,11 +31,15 @@ type Sidebar struct {
 	Title  string        `json:"title"`
 	CanAdd bool          `json:"canAdd"`
 	Items  []SidebarItem `json:"items"`
+	// 扩展放进主程序「工具」分组的条目，排在搜索、下载之后。分组本身属于主程序：
+	// 扩展改不了它的名字，也不能给它加「+」按钮。点击与右键菜单和自己分区里的条目一样交给扩展。
+	Tools []SidebarItem `json:"tools"`
 }
 
 type SidebarItem struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	Icon string `json:"icon,omitempty"` // RemixIcon 码位（十六进制）；只有「工具」分组里的条目显示图标
 }
 
 // TrackList 是扩展处理侧栏条目点击后交给主界面显示的歌曲列表。
@@ -69,20 +73,4 @@ type Playlist struct {
 	ID     string  `json:"id"`
 	Name   string  `json:"name"`
 	Tracks []Track `json:"tracks"`
-}
-
-// StreamInfo 由插件 getStream 返回。
-type StreamInfo struct {
-	Path    string            `json:"path"`
-	URL     string            `json:"url"`
-	Headers map[string]string `json:"headers"`
-	Format  string            `json:"format"` // 可选：mp3 / flac / ogg / wav
-}
-
-// DownloadInfo 由插件 getDownload 返回。
-type DownloadInfo struct {
-	URL     string            `json:"url"`
-	Headers map[string]string `json:"headers"`
-	Ext     string            `json:"ext"`
-	Lyrics  string            `json:"lyrics"`
 }

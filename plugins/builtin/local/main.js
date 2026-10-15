@@ -79,6 +79,15 @@ async function editTags(path) {
   };
 }
 
+// 同名的 .lrc 文件优先于内嵌歌词。
+const readLyrics = (path) => {
+  const base = path.slice(0, path.length - sim.path.extname(path).length);
+  for (const p of [base + ".lrc", base + ".LRC"]) {
+    if (sim.fs.exists(p)) return sim.fs.readText(p);
+  }
+  return sim.media.readLyrics(path);
+};
+
 module.exports = {
   // ---------- 侧边栏 ----------
   // 分区标题、各条目的名字、点击与右键菜单都由扩展自己维护，主程序只负责显示。
@@ -163,7 +172,7 @@ module.exports = {
       info.cover = sim.media.coverFile(meta.path);
       if (scene !== "list") {
         info.playback = sim.fs.file(meta.path);
-        info.lyrics = this.getLyrics({ id: meta.path });
+        info.lyrics = readLyrics(meta.path);
       }
       return info;
     });
@@ -194,18 +203,6 @@ module.exports = {
     return out.sort((a, b) => b.count - a.count).map((item) => item.track);
   },
 
-  getStream(track) {
-    return { path: track.id };
-  },
-
-  getLyrics(track) {
-    const base = track.id.slice(0, track.id.length - sim.path.extname(track.id).length);
-    for (const p of [base + ".lrc", base + ".LRC"]) {
-      if (sim.fs.exists(p)) return sim.fs.readText(p);
-    }
-    return sim.media.readLyrics(track.id);
-  },
-
   // 通过「打开方式」/ 右键菜单打开的文件
   async openFiles(paths) {
     const allow = exts();
@@ -216,22 +213,12 @@ module.exports = {
   getSettings() {
     return [
       {
-        title: "音频扫描",
-        items: [
-          {
-            type: "text", key: "exts", label: "本地音频格式", default: DEFAULT_EXTS,
-            desc: "扫描本地音乐与导入本地文件时识别的音频文件扩展名，以空格分隔。",
-          },
-        ],
+        type: "text", key: "exts", label: "本地音频格式", default: DEFAULT_EXTS,
+        desc: "扫描本地音乐与导入本地文件时识别的音频文件扩展名，以空格分隔。",
       },
       {
-        title: "系统集成",
-        items: [
-          {
-            type: "toggle", key: "fileMenu", label: "注册系统菜单", tag: "实验性", default: false,
-            desc: "开启后，您可以在音频文件右键的「打开方式」菜单中选择 SimMusic 进行播放。在移动 SimMusic 程序目录或移除 SimMusic 前，您需要先关闭此选项。",
-          },
-        ],
+        type: "toggle", key: "fileMenu", label: "注册系统菜单", tag: "实验性", default: false,
+        desc: "开启后，您可以在音频文件右键的「打开方式」菜单中选择 SimMusic 进行播放。在移动 SimMusic 程序目录或移除 SimMusic 前，您需要先关闭此选项。",
       },
     ];
   },

@@ -28,7 +28,8 @@ func (a *App) ReloadMenus() {
 			log.Printf("getSidebar %s: %v", p.ID(), err)
 			continue
 		}
-		if s != nil && s.Title != "" {
+		// A section needs a title; entries for the host's tools group need none.
+		if s != nil && (s.Title != "" || len(s.Tools) > 0) {
 			sidebars[p.ID()] = s
 		}
 	}

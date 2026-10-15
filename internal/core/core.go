@@ -98,6 +98,8 @@ type App struct {
 	OnConfirm          func(text string) (bool, error)
 	OnSidebarOpen      func(pluginID, id string)
 	OnQuit             func()
+	OnShowWindow       func()
+	OnSongMenu         func()
 	DialogOwner        func() uintptr
 
 	mu        sync.Mutex
@@ -114,9 +116,10 @@ type App struct {
 		duration  float64
 		lines     []lyrics.WordLine
 	}
-	lyricKey string
-	loadGen  int
-	loading  int // loadGen of the audio load in flight, zero when idle
+	lyricKey    string
+	infoLoading map[string]bool // songs of the queue whose information is being read for a player display
+	loadGen     int
+	loading     int // loadGen of the audio load in flight, zero when idle
 	// While a track the user switched to is opening, the player shows that track: its start
 	// position, and whether it will play once ready (play / pause pressed meanwhile only flips this).
 	switching int
@@ -316,16 +319,6 @@ func (a *App) OpenFiles(paths []string) {
 // CoverBytes 获取曲目封面原始数据。
 func (a *App) CoverBytes(t model.Track) []byte {
 	c := t.Cover
-	if scheme := a.Plugins.Scheme(t.Source); scheme != nil && c == "" {
-		var s string
-		if err := scheme.CallInto(20*time.Second, &s, "getCover", t); err == nil {
-			c = s
-			p, _ := scheme.Handler("getCover")
-			if p != nil {
-				t.CoverProvider = p.ID()
-			}
-		}
-	}
 	p := a.resourcePlugin(t.Source, t.CoverProvider)
 	var resource model.Resource
 	b, _ := json.Marshal(c)
@@ -440,6 +433,17 @@ func (a *App) PlayNext(t model.Track) {
 
 // AppendQueue 追加到队列末尾；已在队列中的歌曲不再重复添加。
 func (a *App) AppendQueue(ts []model.Track) {
+	added, started := a.appendQueue(ts)
+	switch {
+	case added == 0:
+		a.Toast("歌曲已在队列中")
+	case !started:
+		a.Toast(fmt.Sprintf("已添加 %d 首歌曲", added))
+	}
+}
+
+// appendQueue appends without a notice: how many songs were added, and whether they started an empty queue.
+func (a *App) appendQueue(ts []model.Track) (int, bool) {
 	ts, _ = uniqueTracks(ts, 0)
 	a.mu.Lock()
 	queued := map[string]bool{}
@@ -460,16 +464,15 @@ func (a *App) AppendQueue(ts []model.Track) {
 	}
 	a.mu.Unlock()
 	if len(added) == 0 {
-		a.Toast("歌曲已在队列中")
-		return
+		return 0, false
 	}
 	if empty {
 		a.PlayIndex(0, true)
-		return
+		return len(added), true
 	}
 	a.saveQueue()
-	a.Toast(fmt.Sprintf("已添加 %d 首歌曲", len(added)))
 	a.redraw()
+	return len(added), false
 }
 
 // removeAtLocked deletes a normal-list position; the shuffle order and the current
@@ -1089,15 +1092,22 @@ func (a *App) RunTrackAction(ts []model.Track, key string) {
 
 // PlayNextMany 将多首曲目插入到当前曲目之后；已在队列中的歌曲改为移动到该位置。
 func (a *App) PlayNextMany(ts []model.Track) {
+	if a.playNextMany(ts) {
+		a.Toast("已添加到下一首播放")
+	}
+}
+
+// playNextMany inserts without a notice; it reports whether songs were placed after the current one.
+func (a *App) playNextMany(ts []model.Track) bool {
 	ts, _ = uniqueTracks(ts, 0)
 	if len(ts) == 0 {
-		return
+		return false
 	}
 	a.mu.Lock()
 	if len(a.queue) == 0 || a.index < 0 {
 		a.mu.Unlock()
 		a.PlayQueue(ts, 0)
-		return
+		return false
 	}
 	current := a.queue[a.index].Key()
 	moved := map[string]bool{}
@@ -1111,7 +1121,7 @@ func (a *App) PlayNextMany(ts []model.Track) {
 	ts = kept
 	if len(ts) == 0 {
 		a.mu.Unlock()
-		return
+		return false
 	}
 	for i := len(a.queue) - 1; i >= 0; i-- {
 		if moved[a.queue[i].Key()] {
@@ -1135,8 +1145,8 @@ func (a *App) PlayNextMany(ts []model.Track) {
 	a.queue = append(q, a.queue[at:]...)
 	a.mu.Unlock()
 	a.saveQueue()
-	a.Toast("已添加到下一首播放")
 	a.redraw()
+	return true
 }
 
 // HasCurrent 报告是否有当前曲目（决定是否显示底部播放条）。

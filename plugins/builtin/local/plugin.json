@@ -1,9 +1,9 @@
 {
   "id": "local",
   "name": "本地音乐",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "author": "SimMusic",
-  "description": "内置音源：扫描并播放本地文件夹中的音频文件，支持读取内嵌封面、内嵌歌词与同名 LRC 文件，可编辑 MP3 / FLAC 文件的元数据。",
+  "description": "基础本地音源扩展，提供内置的本地音频文件播放支持，亦可编辑歌曲元数据。",
   "main": "main.js",
   "permissions": ["fs.read", "fs.write", "shell", "sidebar", "trackMenu", "webview"],
   "capabilities": { "download": false },

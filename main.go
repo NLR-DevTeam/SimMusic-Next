@@ -58,6 +58,8 @@ func forwardToRunning(dir string, args []string) bool {
 		return false
 	}
 	defer conn.Close()
+	// 这个进程是用户刚启动的，有权决定前台窗口；已运行的实例没有，由这里让给它，否则它的窗口只会在任务栏闪烁。
+	winx.AllowForeground()
 	conn.SetDeadline(time.Now().Add(2 * time.Second))
 	msg, _ := json.Marshal(args)
 	conn.Write(append(msg, '\n'))
@@ -170,6 +172,7 @@ func main() {
 		os.Exit(0)
 	}
 	a.OnQuit = func() { u.Quit() }
+	a.OnShowWindow = func() { u.ShowWindow(true) }
 
 	listenInstance(dir, func(args []string) {
 		u.ShowWindow(true)

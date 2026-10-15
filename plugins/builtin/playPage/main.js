@@ -13,7 +13,7 @@ const items = [
 const publish = () => sim.playPage.postMessage({ type: "settings", values: Object.fromEntries(items.map((item) => [item.key, sim.settings.get(item.key, item.default)])) });
 
 module.exports = {
-  getSettings: () => [{ items }],
+  getSettings: () => items,
   onSettingChange: publish,
   onPlayPageMessage: (id, data) => { if (data && data.type === "settings") publish(); },
 };

@@ -184,15 +184,16 @@ func (o *Overlay) showScreenMenu(items []Item, choose func(path []int)) {
 	o.openRoot(items, x, y)
 }
 
-func (o *Overlay) showMenu(id int, items []Item, x, y float64) {
+func (o *Overlay) showMenu(id int, items []Item) {
 	o.dropLevels(0, o.choose != nil)
-	o.choose, o.screen = nil, false
-	if !o.prepare() || len(items) == 0 {
+	x, y := cursor()
+	o.prepareAt(x, y)
+	o.choose, o.screen = nil, true
+	if len(items) == 0 {
 		return
 	}
 	o.menuID = id
-	client := o.ownerClient()
-	o.openRoot(items, int(client.Left)+o.px(max(1, x)), int(client.Top)+o.px(max(1, y)))
+	o.openRoot(items, x, y)
 }
 
 func (o *Overlay) openRoot(items []Item, px, py int) {
@@ -360,9 +361,7 @@ func (o *Overlay) tickMenu() {
 	}
 	// Another window in front, Escape, or a press anywhere else closes the menu.
 	foreground, _, _ := pGetForegroundWindow.Call()
-	owner := o.host.Owner()
-	visible, _, _ := pIsWindowVisible.Call(owner)
-	if !o.screen && (owner == 0 || visible == 0) || foreground != o.foreground || keyDown(0x1B) {
+	if foreground != o.foreground || keyDown(0x1B) {
 		o.dropLevels(0, true)
 		return
 	}

@@ -35,6 +35,9 @@ typedef struct Webview {
     HICON icon;
     int reported;           // the Go core has been told this view is closed
     int modalHeld;          // a dialog that has the main window disabled
+    COLORREF background;    // what the container shows where its browser is not
+    int settled, stirred, asleep, waking;   // the play page at rest: see viewAwake
+    int unrevealed;         // a new panel or window kept out of sight until its page has drawn: see revealView
 } Webview;
 
 static __typeof__(&cef_browser_host_create_browser_sync) createBrowserSync;
@@ -140,6 +143,21 @@ static BOOL CALLBACK subclassViewChild(HWND window, LPARAM data) {
     SetWindowSubclass(window, viewChildProc, 2, 0);
     return TRUE;
 }
+// The play page draws only while there is someone to see it: while it is open (or sliding) and the main
+// window is on screen. A page hidden behind the host page, or in a window that is minimized, in the tray or
+// wholly covered by other windows, would otherwise go on animating at full rate. It is left alone until
+// its first page has been drawn once, so that it is laid out and has its pictures before it rests, and
+// stirred for a few seconds when the Go core has told it of another song or other lyrics: a page that
+// draws nothing does not finish what waits on drawing (a picture being decoded), and would be found
+// showing the previous song when it is opened.
+static int mainUnseen;
+static int viewAwake(Webview *view) {
+    if (view->kind != kindPanel || !(view->flags & viewCover) || !view->settled || view->stirred) return 1;
+    return (view->shown || view->sliding) && !mainUnseen;
+}
+// The browser fills its container. One at rest is given no size instead: that is what hides a page as far
+// as Chromium is concerned (hiding the window does not). The page stops drawing, its animations and
+// requestAnimationFrame stop, document.visibilityState is "hidden"; it keeps the size it was laid out at.
 static void resizeView(Webview *view) {
     if (!view->browser || !view->window) return;
     cef_browser_host_t *host = view->browser->get_host(view->browser);
@@ -147,7 +165,9 @@ static void resizeView(Webview *view) {
     releaseCef(host);
     RECT client;
     GetClientRect(view->window, &client);
-    if (child && client.right > 0 && client.bottom > 0) SetWindowPos(child, NULL, 0, 0, client.right, client.bottom, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+    if (!child || client.right <= 0 || client.bottom <= 0) return;
+    view->asleep = !viewAwake(view);
+    SetWindowPos(child, NULL, 0, 0, view->asleep ? 0 : client.right, view->asleep ? 0 : client.bottom, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
 }
 static void applyViewFrame(Webview *view) {
     int borderless = IsZoomed(view->window) || view->fullscreen;
@@ -199,7 +219,7 @@ static void layoutPanel(Webview *view) {
     if (view->flags & viewCover) {
         left = 0; top = 0; width = client.right; height = client.bottom;
         // A covering panel that is not shown is not hidden but parked below the window, clipped away by it:
-        // the page is laid out at its real size and keeps a rendered frame, so it is there the moment it slides in.
+        // the page stays laid out at its real size, and has only to draw itself before it slides in (wakePanel).
         if (!view->shown && !view->sliding && width > 0 && height > 0) {
             view->offset = height * 6 / 5;
             SetWindowRgn(view->window, NULL, FALSE);
@@ -222,6 +242,11 @@ static void layoutPanel(Webview *view) {
             CombineRgn(region, region, hole, RGN_DIFF);
             DeleteObject(hole);
         }
+    }
+    // Until its page has drawn, the panel is in place at its size but shows nothing (revealView).
+    if (view->unrevealed) {
+        if (region) DeleteObject(region);
+        region = CreateRectRgn(0, 0, 0, 0);
     }
     SetWindowRgn(view->window, region, TRUE);
     SetWindowPos(view->window, HWND_TOP, left, top + view->offset, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -249,6 +274,49 @@ static void slidePanel(Webview *view, int wasShown) {
     QueryPerformanceCounter(&view->slideStart);
     if (!InterlockedExchange(&slideTicking, 1)) CloseHandle(CreateThread(NULL, 0, slideTicks, NULL, 0, NULL));
 }
+// A browser child shows black until Chromium has drawn its first frame into it. A new panel or window is
+// therefore kept out of sight, though laid out at its real size so that the page is drawn, until the page
+// reports two frames after its first load (or a second and a half has passed, whatever the page does):
+// a panel with an empty window region, a window fully transparent.
+static void askDrawn(Webview *view) {
+    cef_frame_t *frame = view->browser ? view->browser->get_main_frame(view->browser) : NULL;
+    if (!frame) return;
+    cef_string_t code = cefString(L"window.__simHostReceive&&window.__simHostReceive(\"p\")"), source = cefString(L"simhost://command");
+    frame->execute_java_script(frame, &code, &source, 0);
+    releaseCef(frame);
+}
+// A play page at rest has to draw itself as it is now before it slides in: moved into view while its first
+// frames are still being made (a page with heavy effects takes a while over them), the window would drag
+// stale pixels up the screen. So it starts drawing where it is parked, and slides once the page reports
+// two frames of its own, or after half a second whatever the page does.
+static void wakePanel(Webview *view) {
+    RECT client;
+    GetClientRect(mainWindow, &client);
+    if (!view->sliding) view->offset = client.bottom * 6 / 5;
+    view->waking = 1;
+    resizeView(view);
+    askDrawn(view);
+    SetTimer(view->window, 1, 500, NULL);
+}
+static void wokePanel(Webview *view) {
+    if (!view->waking) return;
+    view->waking = 0;
+    KillTimer(view->window, 1);
+    if (!view->shown) return;
+    slidePanel(view, 0);
+    layoutPanel(view);
+}
+static void revealView(Webview *view) {
+    if (!view->unrevealed) return;
+    view->unrevealed = 0;
+    KillTimer(view->window, 4);
+    if (view->kind == kindPanel) layoutPanel(view);
+    else {
+        SetLayeredWindowAttributes(view->window, 0, 255, LWA_ALPHA);
+        SetWindowLongPtrW(view->window, GWL_EXSTYLE, GetWindowLongPtrW(view->window, GWL_EXSTYLE) & ~WS_EX_LAYERED);
+        RedrawWindow(view->window, NULL, NULL, RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN);
+    }
+}
 // One step for every frame the desktop composes, from the thread below.
 static void stepSlides(void) {
     LARGE_INTEGER now, frequency;
@@ -260,8 +328,49 @@ static void stepSlides(void) {
         if (t >= 1) { view->offset = view->slideTo; view->sliding = 0; }
         else { view->offset = view->slideFrom + (int)((view->slideTo - view->slideFrom) * easeCss(t)); sliding = 1; }
         layoutPanel(view);
+        // Slid away, the page rests.
+        if (!view->sliding) resizeView(view);
     }
     if (!sliding) InterlockedExchange(&slideTicking, 0);
+}
+// Whether anything of the main window can be seen: it is shown, not minimized, on this virtual desktop, and
+// the windows above it leave some of it uncovered. A window that may be seen through (layered, drawn by
+// composition only, or of a shape of its own) is not taken to cover anything.
+#ifndef WS_EX_NOREDIRECTIONBITMAP
+#define WS_EX_NOREDIRECTIONBITMAP 0x00200000L
+#endif
+static int mainSeen(void) {
+    BOOL cloaked = FALSE;
+    if (!IsWindowVisible(mainWindow) || IsIconic(mainWindow)) return 0;
+    if (SUCCEEDED(DwmGetWindowAttribute(mainWindow, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) return 0;
+    RECT rect, screen = { GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN), 0, 0 };
+    screen.right = screen.left + GetSystemMetrics(SM_CXVIRTUALSCREEN); screen.bottom = screen.top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    GetWindowRect(mainWindow, &rect);
+    if (!IntersectRect(&rect, &rect, &screen)) return 0;
+    HRGN left = CreateRectRgnIndirect(&rect), shape = CreateRectRgn(0, 0, 0, 0);
+    int seen = 1;
+    for (HWND above = GetWindow(mainWindow, GW_HWNDPREV); above && seen; above = GetWindow(above, GW_HWNDPREV)) {
+        if (!IsWindowVisible(above) || IsIconic(above)) continue;
+        if (GetWindowLongPtrW(above, GWL_EXSTYLE) & (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOREDIRECTIONBITMAP)) continue;
+        if (SUCCEEDED(DwmGetWindowAttribute(above, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) continue;
+        if (GetWindowRgn(above, shape) != ERROR) continue;
+        RECT cover;
+        if (FAILED(DwmGetWindowAttribute(above, DWMWA_EXTENDED_FRAME_BOUNDS, &cover, sizeof(cover))) && !GetWindowRect(above, &cover)) continue;
+        HRGN covered = CreateRectRgnIndirect(&cover);
+        seen = CombineRgn(left, left, covered, RGN_DIFF) != NULLREGION;
+        DeleteObject(covered);
+    }
+    DeleteObject(left); DeleteObject(shape);
+    return seen;
+}
+// Looked at when the window is shown, hidden, moved or activated, and on a timer besides, since nothing
+// tells a window that others moved over it or away: often while unseen, so that the page is back at once.
+static void checkSeen(void) {
+    int unseen = !mainSeen();
+    SetTimer(mainWindow, 1, unseen ? 100 : 1000, NULL);
+    if (unseen == mainUnseen) return;
+    mainUnseen = unseen;
+    for (Webview *view = webviews; view; view = view->next) if (view->kind == kindPanel && (view->flags & viewCover)) resizeView(view);
 }
 static void layoutPanels(void) {
     for (Webview *view = webviews; view; view = view->next) layoutPanel(view);
@@ -286,8 +395,21 @@ static LRESULT CALLBACK viewProc(HWND window, UINT message, WPARAM wParam, LPARA
     case WM_DWMCOMPOSITIONCHANGED:
         if (frameless) applyViewFrame(view);
         break;
-    case WM_ERASEBKGND:
+    case WM_ERASEBKGND: {
+        // Seen only where the browser is not: all of it while the page rests, until its first frame after.
+        RECT client;
+        GetClientRect(window, &client);
+        HBRUSH brush = CreateSolidBrush(view->background);
+        FillRect((HDC)wParam, &client, brush);
+        DeleteObject(brush);
         return 1;
+    }
+    case WM_TIMER:
+        if (wParam == 1) { KillTimer(window, 1); wokePanel(view); }
+        if (wParam == 2) { KillTimer(window, 2); view->settled = 1; resizeView(view); }
+        if (wParam == 3) { KillTimer(window, 3); view->stirred = 0; resizeView(view); }
+        if (wParam == 4) revealView(view);
+        return 0;
     case WM_NCHITTEST: {
         if (view->kind == kindPanel) {
             LRESULT hit = SendMessageW(mainWindow, message, wParam, lParam);
@@ -466,6 +588,9 @@ static void CEF_CALLBACK viewLoadEnd(cef_load_handler_t *self, cef_browser_t *br
     if (!mainFrameEvent("load", browser, frame, &view)) return;
     emitNumber(status); emitEnd();
     if (view->window) EnumChildWindows(view->window, subclassViewChild, 0);
+    // The play page may rest once this first page has had time to be drawn.
+    if (view->unrevealed) askDrawn(view);
+    if (view->window && (view->flags & viewCover) && !view->settled) SetTimer(view->window, 2, 1500, NULL);
 }
 static void CEF_CALLBACK viewLoadError(cef_load_handler_t *self, cef_browser_t *browser, cef_frame_t *frame, cef_errorcode_t code,
     const cef_string_t *text, const cef_string_t *failedUrl) {
@@ -590,11 +715,16 @@ static int CEF_CALLBACK viewProcessMessage(cef_client_t *self, cef_browser_t *br
     int handled = name && !wcscmp((wchar_t *)name->str, L"simHost");
     if (handled && view && frame->is_main(frame)) {
         cef_list_value_t *list = message->get_argument_list(message);
-        emitBegin("msg", view->id);
-        emitUserFree(frame->get_url(frame));
-        emitUserFree(list->get_string(list, 0));
-        emitUserFree(list->get_string(list, 1));
-        emitEnd();
+        cef_string_userfree_t kind = list->get_string(list, 0);
+        // "p": the page has drawn since it was asked to say so. The host's own; the Go core is not told.
+        if (kind && kind->length == 1 && kind->str[0] == L'p') { revealView(view); wokePanel(view); freeString(kind); }
+        else {
+            emitBegin("msg", view->id);
+            emitUserFree(frame->get_url(frame));
+            emitUserFree(kind);
+            emitUserFree(list->get_string(list, 1));
+            emitEnd();
+        }
         releaseCef(list);
     }
     if (name) freeString(name);
@@ -666,6 +796,7 @@ static cef_request_context_t *partition(const char *path) {
         settings.cache_path = cefString(directory);
         cef_request_context_t *context = createContext(&settings, NULL);
         if (!context) break;
+        quietContext(context);
         partitions[i].path = directory;
         partitions[i].context = context;
         return context;
@@ -743,6 +874,7 @@ static int openDialogPopup(const cef_string_t *name, const cef_popup_features_t 
     WideCharToMultiByte(CP_UTF8, 0, (wchar_t *)name->str, (int)name->length, view->id, sizeof(view->id) - 1, NULL, NULL);
     view->kind = kindWindow;
     view->flags = viewModal;
+    view->background = RGB(0xf9, 0xf9, 0xfb);
     view->base = wide("");
     registerViewClass();
     UINT dpi = GetDpiForWindow(mainWindow);
@@ -797,7 +929,8 @@ static void createView(char **f, int count) {
         GetMonitorInfoW(MonitorFromWindow(mainWindow, MONITOR_DEFAULTTONEAREST), &monitor);
         int x = monitor.rcWork.left + (monitor.rcWork.right - monitor.rcWork.left - width) / 2, y = monitor.rcWork.top + (monitor.rcWork.bottom - monitor.rcWork.top - height) / 2;
         if (view->flags & viewPositioned) { x = MulDiv(atoi(f[14]), dpi, 96); y = MulDiv(atoi(f[15]), dpi, 96); }
-        view->window = CreateWindowExW(extended, L"SimMusicWebview", title, style, x, y, width, height, NULL, NULL, instance, NULL);
+        view->window = CreateWindowExW(extended | WS_EX_LAYERED, L"SimMusicWebview", title, style, x, y, width, height, NULL, NULL, instance, NULL);
+        if (view->window) SetLayeredWindowAttributes(view->window, 0, 0, LWA_ALPHA);
     }
     free(title);
     if (view->kind != kindOffscreen && !view->window) { emitBegin("closed", view->id); emitEnd(); free(view->base); free(view); return; }
@@ -827,6 +960,7 @@ static void createView(char **f, int count) {
     cef_browser_settings_t settings = { .size = sizeof(settings), .background_color = 0xffffffff, .windowless_frame_rate = 1 };
     unsigned int color;
     if (f[7][0] == '#' && strlen(f[7]) == 7 && sscanf(f[7] + 1, "%6x", &color) == 1) settings.background_color = 0xff000000 | color;
+    view->background = RGB((settings.background_color >> 16) & 255, (settings.background_color >> 8) & 255, settings.background_color & 255);
     cef_dictionary_value_t *extra = createDictionary();
     cef_string_t key = cefString(L"simWebview");
     extra->set_bool(extra, &key, 1);
@@ -849,6 +983,10 @@ static void createView(char **f, int count) {
     }
     view->browserId = view->browser->get_identifier(view->browser);
     if (view->window) EnumChildWindows(view->window, subclassViewChild, 0);
+    if (view->kind == kindWindow || (view->kind == kindPanel && !(view->flags & viewCover))) {
+        view->unrevealed = 1;
+        SetTimer(view->window, 4, 1500, NULL);
+    }
     if (view->kind == kindPanel && (view->flags & viewCover)) layoutPanel(view);
     if (view->kind == kindWindow) {
         if (view->flags & viewFullscreen) setViewFullscreen(view, 1);
@@ -934,7 +1072,8 @@ static void hostCommand(char *line) {
         for (int i = 7; i + 4 < count && view->holeCount < 16; i += 5, view->holeCount++)
             for (int j = 0; j < 5; j++) view->holes[view->holeCount][j] = atoi(f[i + j]);
         if ((view->flags & viewCover) && wasShown != view->shown) {
-            slidePanel(view, wasShown);
+            if (view->shown && view->asleep) wakePanel(view);
+            else { view->waking = 0; KillTimer(view->window, 1); slidePanel(view, wasShown); }
             // The keyboard goes back to the host page with the play page.
             if (!view->shown && mainBrowser && IsChild(view->window, GetFocus())) {
                 cef_browser_host_t *host = mainBrowser->get_host(mainBrowser);
@@ -944,6 +1083,7 @@ static void hostCommand(char *line) {
         }
         layoutPanel(view);
     }
+    else if (!strcmp(command, "stir")) { if (view->window && (view->flags & viewCover)) { view->stirred = 1; SetTimer(view->window, 3, 5000, NULL); resizeView(view); } }
     else if (!strcmp(command, "fullscreen") && count >= 3) { if (view->kind == kindPanel && (view->flags & viewCover)) setMainFullscreen(f[2][0] == '1'); }
     else if (!strcmp(command, "win") && count >= 5) windowCommand(view, f[2], f[3], f[4]);
 }
@@ -993,6 +1133,7 @@ static const wchar_t bootstrap[] = L"(function(native){"
     L"if(kind==='m')target.dispatchEvent(new MessageEvent('message',{data:JSON.parse(a)}));"
     L"else if(kind==='e'){running[a]=1;Promise.resolve().then(b).then(function(value){reply(a,value)},function(error){reply(a,null,String(error&&error.message||error))})}"
     L"else if(kind==='c'){if(!running[a])reply(a,null,'script could not be parsed');delete running[a]}"
+    L"else if(kind==='p')requestAnimationFrame(function(){requestAnimationFrame(function(){native('p','')})});"
     L"}});})";
 static int rendererViews[256], rendererViewCount;
 static void CEF_CALLBACK rendererBrowserCreated(cef_render_process_handler_t *self, cef_browser_t *browser, cef_dictionary_value_t *extra) {

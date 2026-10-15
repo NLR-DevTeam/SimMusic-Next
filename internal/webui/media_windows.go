@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"hash/crc32"
 	"net/url"
 	"strconv"
 	"strings"
@@ -45,6 +46,9 @@ func sendHost(hwnd, kind uintptr, text string) bool {
 
 // syncMedia sends "<state>\t<title>\t<artist>\t<cover address>" whenever it changes: state 0 is
 // nothing to play, 1 paused, 2 playing. The cover is fetched from this process's own cover endpoint.
+// Every message makes Windows redraw its media controls, so nothing that merely happens again may alter
+// it: the cover address names the picture, not the revision of the record, which also moves when an
+// address of the source expires and is read anew.
 func (u *UI) syncMedia() {
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
@@ -74,7 +78,15 @@ func (u *UI) syncMedia() {
 			cover := ""
 			if t.InfoReady || t.Cover != "" {
 				u.remember(s.Queue)
-				cover = u.url + "cover?key=" + url.QueryEscape(t.Key()) + "&scene=play&rev=" + strconv.FormatUint(t.InfoRevision, 10)
+				picture := t.LargeCover
+				if picture == "" {
+					picture = t.Cover
+				}
+				// A picture on the web is the same picture however its address is signed this time.
+				if strings.HasPrefix(picture, "http://") || strings.HasPrefix(picture, "https://") {
+					picture = "web"
+				}
+				cover = u.url + "cover?key=" + url.QueryEscape(t.Key()) + "&scene=play&v=" + strconv.FormatUint(uint64(crc32.ChecksumIEEE([]byte(picture))), 36)
 			}
 			text = strings.Join([]string{state, field.Replace(t.Title), field.Replace(artist), cover}, "\t")
 		}

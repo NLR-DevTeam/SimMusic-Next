@@ -4,6 +4,7 @@ package winx
 import (
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -196,10 +197,34 @@ func ShowWindowAsync(hwnd uintptr, show bool) {
 		if r, _, _ := procIsIconic.Call(hwnd); r != 0 {
 			procShowWindowAsync.Call(hwnd, SW_RESTORE)
 		}
-		procSetForegroundWindow.Call(hwnd)
+		if r, _, _ := procSetForegroundWindow.Call(hwnd); r != 0 {
+			return
+		}
+		// 系统不让后台进程抢前台（窗口只在任务栏闪烁）：借前台窗口所在线程的输入队列再试一次。
+		go func() {
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
+			foreground, _, _ := user32.NewProc("GetForegroundWindow").Call()
+			if foreground == 0 || foreground == hwnd {
+				return
+			}
+			other, _, _ := user32.NewProc("GetWindowThreadProcessId").Call(foreground, 0)
+			self := uintptr(windows.GetCurrentThreadId())
+			attach := user32.NewProc("AttachThreadInput")
+			if attached, _, _ := attach.Call(self, other, 1); attached != 0 {
+				user32.NewProc("BringWindowToTop").Call(hwnd)
+				procSetForegroundWindow.Call(hwnd)
+				attach.Call(self, other, 0)
+			}
+		}()
 	} else {
 		procShowWindowAsync.Call(hwnd, SW_HIDE)
 	}
+}
+
+// AllowForeground 把本进程决定前台窗口的权利让给其他进程：第二个实例把参数转交给已运行的实例之前调用。
+func AllowForeground() {
+	user32.NewProc("AllowSetForegroundWindow").Call(^uintptr(0)) // ASFW_ANY
 }
 
 // FocusContent 在主窗口位于前台、但键盘焦点停留在窗口框架上时，把焦点交给其内容子窗口。

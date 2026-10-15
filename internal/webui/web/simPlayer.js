@@ -42,8 +42,9 @@
         toggleFullscreen: () => request("setFullscreen", !state.fullscreen),
         shortcuts: true
     };
-    ["toggle", "play", "pause", "previous", "next", "stop", "seek", "setVolume", "setSpeed", "cycleMode", "setMode", "playIndex", "removeFromQueue", "moveInQueue", "clearQueue", "setSleep", "cancelSleep",
-        "close", "showMenu", "showDialog", "setTitleBar", "window", "setLyricsShown", "loadInfo", "setFullscreen"].forEach(name => player[name] = (...args) => request(name, ...args));
+    ["toggle", "play", "pause", "previous", "next", "stop", "seek", "setVolume", "setSpeed", "cycleMode", "setMode", "playIndex", "removeFromQueue", "moveInQueue", "clearQueue", "setSleep", "cancelSleep", "showWindow",
+        "setQueue", "append", "playNext",
+        "close", "showMenu", "showDialog", "setTitleBar", "window", "setLyricsShown", "loadInfo", "spectrum", "setFullscreen"].forEach(name => player[name] = (...args) => request(name, ...args));
     simHost.addEventListener("message", event => {
         const data = event.data;
         if (!data || data.sim !== "player") return;

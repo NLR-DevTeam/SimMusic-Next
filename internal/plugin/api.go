@@ -17,6 +17,7 @@ import (
 	"github.com/dop251/goja"
 
 	"simmusic/internal/audio"
+	"simmusic/internal/model"
 	"simmusic/internal/winx"
 )
 
@@ -94,7 +95,7 @@ func (p *Plugin) installAPI(rs *runState) {
 
 	// ----- 基本信息与日志 -----
 	sim.Set("plugin", map[string]any{
-		"id": p.Manifest.ID, "name": p.Manifest.Name, "version": p.Manifest.Version, "dataDir": p.DataDir,
+		"id": p.Manifest.ID, "name": p.Manifest.Name, "version": p.Manifest.Version, "dataDir": p.DataDir, "dir": p.Dir,
 	})
 	sim.Set("platform", runtime.GOOS)
 	logFn := func(level string) func(goja.FunctionCall) goja.Value {
@@ -269,6 +270,33 @@ func (p *Plugin) installAPI(rs *runState) {
 		path = p.checkWrite(path)
 		_ = os.MkdirAll(filepath.Dir(path), 0o755)
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			p.throw(err)
+		}
+	})
+	// writeFile(path, data) writes binary data: a File (one the host handed over, or made with new File),
+	// an ArrayBuffer or a typed array; text is written as UTF-8.
+	fsObj.Set("writeFile", func(path string, data goja.Value) {
+		path = p.checkWrite(path)
+		var content []byte
+		switch v := data.Export().(type) {
+		case string:
+			content = []byte(v)
+		case goja.ArrayBuffer:
+			content = v.Bytes()
+		case []uint8:
+			content = v
+		default:
+			var resource model.Resource
+			if err := rt.ExportTo(data, &resource); err != nil || resource.Path == "" && resource.Data == "" {
+				p.throw(errors.New("writeFile 的数据应为 File、ArrayBuffer、TypedArray 或文本"))
+			}
+			var err error
+			if content, err = p.fileBytes(resource); err != nil {
+				p.throw(err)
+			}
+		}
+		_ = os.MkdirAll(filepath.Dir(path), 0o755)
+		if err := os.WriteFile(path, content, 0o644); err != nil {
 			p.throw(err)
 		}
 	})
@@ -531,6 +559,7 @@ func (p *Plugin) installAPI(rs *runState) {
 	})
 	shell.Set("openPath", func(path string) { p.need(PermShell); winx.OpenPath(path) })
 	shell.Set("showItemInFolder", func(path string) { p.need(PermShell); winx.RevealFile(path) })
+	p.installShell(rs, shell)
 	clipboard := rt.NewObject()
 	clipboard.Set("writeText", func(text string) {
 		p.need(PermClipboardWrite)
@@ -588,5 +617,6 @@ func (p *Plugin) installAPI(rs *runState) {
 		}
 	})
 	p.installWebview(rs, sim)
-	p.installPlayer(sim)
+	p.installPlayer(rs, sim)
+	p.installManage(sim)
 }

@@ -36,17 +36,14 @@ type SettingSection struct {
 
 // PluginSettings 获取插件声明的设置界面，并为缺失值填入默认值。
 func (a *App) PluginSettings(p *plugin.Plugin) []SettingSection {
-	var secs []SettingSection
-	if err := p.CallInto(10*time.Second, &secs, "getSettings"); err != nil {
+	// getSettings returns the items; the one section they are shown in is the host's.
+	var items []SettingItem
+	if err := p.CallInto(10*time.Second, &items, "getSettings"); err != nil {
 		return nil
 	}
-	var items []SettingItem
-	for _, s := range secs {
-		for _, it := range s.Items {
-			if it.Key != "" && it.Default != nil && p.Settings.Get(it.Key) == nil {
-				p.Settings.SetDefault(it.Key, it.Default)
-			}
-			items = append(items, it)
+	for _, it := range items {
+		if it.Key != "" && it.Default != nil && p.Settings.Get(it.Key) == nil {
+			p.Settings.SetDefault(it.Key, it.Default)
 		}
 	}
 	if len(items) == 0 {

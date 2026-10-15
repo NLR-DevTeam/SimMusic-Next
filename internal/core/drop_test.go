@@ -3,6 +3,7 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"simmusic/internal/audio"
@@ -23,15 +24,15 @@ func TestDropFiles(t *testing.T) {
 	library, outside := filepath.Join(dir, "library"), filepath.Join(dir, "outside")
 	os.MkdirAll(library, 0o755)
 	os.MkdirAll(outside, 0o755)
-	song, text, pack := filepath.Join(outside, "song.mp3"), filepath.Join(outside, "notes.txt"), filepath.Join(outside, "x.simex")
-	for _, file := range []string{song, text, pack} {
+	song, text, pack, other := filepath.Join(outside, "song.mp3"), filepath.Join(outside, "notes.txt"), filepath.Join(outside, "x.simex"), filepath.Join(outside, "y.SIMEX")
+	for _, file := range []string{song, text, pack, other} {
 		os.WriteFile(file, []byte("data"), 0o644)
 	}
 
-	// A folder becomes a local directory, once; a .simex is handed back for the installer.
-	simex, _ := a.DropFiles([]string{library, pack, text}, "home", "", "")
+	// A folder becomes a local directory, once; every .simex is handed back, in order, for the installer.
+	simex, _ := a.DropFiles([]string{library, pack, text, other}, "home", "", "")
 	a.DropFiles([]string{library}, "home", "", "")
-	if folders := a.localFolders(); simex != pack || len(folders) != 1 || folders[0] != library {
+	if folders := a.localFolders(); !slices.Equal(simex, []string{pack, other}) || len(folders) != 1 || folders[0] != library {
 		t.Fatalf("folder import: %v, simex %q", folders, simex)
 	}
 	// Audio dropped on a local directory is copied in, never over an existing file; other files are ignored.

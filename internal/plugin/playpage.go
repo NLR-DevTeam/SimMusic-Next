@@ -4,8 +4,6 @@ import (
 	"errors"
 	"regexp"
 	"strings"
-
-	"github.com/dop251/goja"
 )
 
 // PlayPage is a play page an extension offers in plugin.json. The user picks one of all offered
@@ -66,67 +64,4 @@ func validatePlayPages(pages []PlayPage) error {
 // the host alone creates, shows and hides a play page.
 func (p *Plugin) PlayPagesAllowed() bool {
 	return p.Running() && p.HasPermission(PermPlayPage) && p.HasPermission(PermPlayer)
-}
-
-// PlayerHost is the playback control of the host (implemented by core).
-type PlayerHost interface {
-	PlayerState() map[string]any
-	PlayerCommand(name string, args []any) (any, error)
-}
-
-// PlayPageBackend delivers a message of the extension to its play page while that page is loaded.
-type PlayPageBackend interface {
-	PostPlayPage(p *Plugin, data string) bool
-}
-
-var playerCommands = []string{"toggle", "play", "pause", "previous", "next", "stop", "seek", "setVolume", "setSpeed", "cycleMode", "setMode",
-	"playIndex", "removeFromQueue", "moveInQueue", "clearQueue", "setSleep", "cancelSleep"}
-
-func (p *Plugin) installPlayer(sim *goja.Object) {
-	rt := p.rt
-	host := func() PlayerHost {
-		p.need(PermPlayer)
-		h, ok := p.mgr.Host.(PlayerHost)
-		if !ok {
-			p.throw(errors.New("当前宿主不支持播放控制"))
-		}
-		return h
-	}
-	player := rt.NewObject()
-	sim.Set("player", player)
-	player.Set("state", func() goja.Value { return p.toJS(host().PlayerState()) })
-	// Operations may call back into extensions (a song being opened), so none runs on this thread.
-	for _, name := range playerCommands {
-		player.Set(name, func(call goja.FunctionCall) goja.Value {
-			h := host()
-			args := make([]any, len(call.Arguments))
-			for i, arg := range call.Arguments {
-				args[i] = exportJSON(arg)
-			}
-			return p.async(func() (any, error) { return h.PlayerCommand(name, args) })
-		})
-	}
-	// sim.playPage.postMessage(data) reaches the extension's own play page while it is the one in use;
-	// the page's simPlayer.postMessage arrives at the exported onPlayPageMessage(pageId, data).
-	page := rt.NewObject()
-	sim.Set("playPage", page)
-	page.Set("postMessage", func(data goja.Value) bool {
-		p.need(PermPlayer)
-		backend, ok := p.mgr.webviewBackend().(PlayPageBackend)
-		if !ok {
-			return false
-		}
-		text := "null"
-		if data != nil && !goja.IsUndefined(data) {
-			stringify, _ := goja.AssertFunction(rt.Get("JSON").ToObject(rt).Get("stringify"))
-			v, err := stringify(goja.Undefined(), data)
-			if err != nil {
-				panic(err)
-			}
-			if !goja.IsUndefined(v) {
-				text = v.String()
-			}
-		}
-		return backend.PostPlayPage(p, text)
-	})
 }

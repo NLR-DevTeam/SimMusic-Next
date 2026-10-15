@@ -6,30 +6,14 @@ import (
 	"strings"
 )
 
-func (p *Plugin) CanDownload() bool {
-	if p.Manifest.Capabilities.Download != nil {
-		return *p.Manifest.Capabilities.Download && (p.Has("getMusicInfo") || p.Has("getDownload"))
-	}
-	return p.Has("getDownload")
-}
-
-func (p *Plugin) DownloadAllowed() bool {
-	if !p.CanDownload() {
-		return false
-	}
-	// Preserve legacy extension behavior; new capability declarations use song-menu grants.
-	if p.Manifest.Capabilities.Download == nil && !p.Manifest.declares(PermTrackMenu) {
-		return true
-	}
-	return p.TrackMenuGranted("download")
-}
-
+// TrackMenu finds a declared menu by its key, scheme:<protocol>/<path>; the download entry of a protocol
+// that offers downloads is scheme:<protocol>/download.
 func (p *Plugin) TrackMenu(key string) (model.Action, bool) {
-	if strings.HasPrefix(key, "scheme:") {
-		parts := strings.SplitN(strings.TrimPrefix(key, "scheme:"), "/", 2)
-		if len(parts) != 2 {
-			return model.Action{}, false
-		}
+	parts := strings.SplitN(strings.TrimPrefix(key, "scheme:"), "/", 2)
+	if !strings.HasPrefix(key, "scheme:") || len(parts) != 2 {
+		return model.Action{}, false
+	}
+	{
 		for _, d := range append(append([]SchemeDeclaration(nil), p.Manifest.Schemes...), p.Manifest.SchemeExtensions...) {
 			if d.Scheme != parts[0] {
 				continue
@@ -39,7 +23,7 @@ func (p *Plugin) TrackMenu(key string) (model.Action, bool) {
 				if on == nil {
 					on = p.Manifest.Capabilities.Download
 				}
-				if on != nil && *on || on == nil && (d.Handlers["getDownload"] != "" || p.Has("getDownload")) {
+				if on != nil && *on {
 					return model.Action{Key: key, Label: "下载曲目", Icon: "EC5A"}, true
 				}
 				return model.Action{}, false
@@ -49,12 +33,8 @@ func (p *Plugin) TrackMenu(key string) (model.Action, bool) {
 			item.Key = key
 			return item, ok
 		}
-		return model.Action{}, false
 	}
-	if key == "download" && (p.Manifest.Capabilities.Download != nil && *p.Manifest.Capabilities.Download || p.Manifest.Capabilities.Download == nil && p.CanDownload()) {
-		return model.Action{Key: "download", Label: "下载曲目", Icon: "EC5A", Scenes: []string{"list", "play", "queue"}}, true
-	}
-	return findTrackMenu(p.Manifest.TrackMenus, key)
+	return model.Action{}, false
 }
 
 func findTrackMenu(items []model.Action, key string) (model.Action, bool) {
@@ -110,13 +90,6 @@ func (p *Plugin) TrackMenuGranted(key string) bool {
 
 // MenuDeclarations returns scoped declarations for the permission editor.
 func (p *Plugin) MenuDeclarations() []model.Action {
-	if len(p.Manifest.Schemes) == 0 && len(p.Manifest.SchemeExtensions) == 0 {
-		items := append([]model.Action(nil), p.Manifest.TrackMenus...)
-		if d, ok := p.TrackMenu("download"); ok {
-			items = append(items, d)
-		}
-		return items
-	}
 	var out []model.Action
 	declarations := append(append([]SchemeDeclaration(nil), p.Manifest.Schemes...), p.Manifest.SchemeExtensions...)
 	for _, d := range declarations {
@@ -158,10 +131,5 @@ func (p *Plugin) SetTrackMenuGranted(key string, on bool) error {
 
 func (p *Plugin) TrackMenuPreference(key string) bool {
 	on, ok := p.mgr.enabled.Get("plugin.trackMenu." + p.ID() + "." + key).(bool)
-	if !ok && strings.HasPrefix(key, "scheme:") {
-		if at := strings.Index(key, "/"); at >= 0 {
-			on, ok = p.mgr.enabled.Get("plugin.trackMenu." + p.ID() + "." + key[at+1:]).(bool)
-		}
-	}
 	return !ok || on
 }

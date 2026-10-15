@@ -22,12 +22,13 @@ const (
 	PermClipboardWrite = "clipboard.write"
 	PermFSRead         = "fs.read"  // 读取数据目录以外的文件与音频元数据
 	PermFSWrite        = "fs.write" // 写入 / 删除数据目录以外的文件
-	PermShell          = "shell"    // 系统集成：注册右键菜单、在资源管理器中打开
+	PermShell          = "shell"    // 系统集成：注册右键菜单、在资源管理器中打开、运行本机程序
 	PermSidebar        = "sidebar"  // 在应用侧栏显示分组及歌单入口
 	PermTrackMenu      = "trackMenu"
 	PermSchemeExtend   = "scheme.extend"
 	PermWebview        = "webview"  // 在主界面或独立窗口中显示扩展自己的网页
-	PermPlayer         = "player"   // 播放控制：读取播放状态、队列与歌词，执行播放页能做的全部操作
+	PermPlayer         = "player"   // 播放控制：读取播放状态、队列、歌词与歌曲音频，执行播放页能做的全部操作并编排播放队列
+	PermPlugins        = "plugin"   // 管理扩展：查看、重载，以及每次都需用户确认的安装、卸载、启用、停用
 	PermPlayPage       = "playPage" // 提供播放页；页面的显示与隐藏完全由宿主控制，不需要 webview 权限
 )
 
@@ -46,16 +47,14 @@ var permInfos = map[string]PermInfo{
 	PermFSRead:         {PermFSRead, "读取文件", "读取扩展数据目录以外的文件，包括读取音频文件的元数据", 0xED0F, false},
 	PermFSWrite:        {PermFSWrite, "写入文件", "在扩展数据目录以外创建、修改或删除文件，包括修改音频文件的元数据", 0xECDB, true},
 	PermWebview:        {PermWebview, "网页界面", "在主界面内或独立窗口中显示扩展自己的网页", 0xF2C4, false},
-	PermPlayer:         {PermPlayer, "播放控制", "读取播放状态、播放队列与歌词，控制播放、音量、倍速、播放队列与睡眠定时", 0xF00B, false},
+	PermPlayer:         {PermPlayer, "播放控制", "读取播放状态、播放队列、歌词与频谱，获取队列中歌曲的音频地址或文件，控制播放、音量、倍速、播放队列与睡眠定时", 0xF00B, true},
 	PermPlayPage:       {PermPlayPage, "播放页", "提供可在设置中选用的播放页，由主界面负责显示与隐藏", 0xF2C4, false},
-	PermShell:          {PermShell, "系统集成", "修改系统右键菜单、在资源管理器中打开文件等", 0xF1F6, true},
+	PermPlugins:        {PermPlugins, "扩展管理", "查看已安装的扩展并重新加载；安装、卸载、启用、停用扩展时，每次都会先征得您的确认", 0xF450, true},
+	PermShell:          {PermShell, "系统集成", "修改系统右键菜单、在资源管理器中打开文件、运行本机程序等", 0xF1F6, true},
 	PermSidebar:        {PermSidebar, "侧栏显示", "在应用侧栏显示此扩展的分组和歌单入口", 0xF011, false},
 	PermTrackMenu:      {PermTrackMenu, "歌曲菜单", "在歌曲列表、播放详情和播放队列中提供附加操作", 0xEF79, false},
 	PermSchemeExtend:   {PermSchemeExtend, "追加协议支持", "覆盖已有协议的音乐信息、下载处理，或追加歌曲菜单", 0xEC9D, false},
 }
-
-// legacy 兼容旧的权限名。
-var legacyPerms = map[string][]string{"fs": {PermFSRead, PermFSWrite}}
 
 // Info 返回权限描述；未知权限也会返回一个可展示的条目。
 func Info(perm string) PermInfo {
@@ -65,20 +64,14 @@ func Info(perm string) PermInfo {
 	return PermInfo{Key: perm, Name: perm, Desc: "未知权限（不会被授予任何能力）", Icon: 0xEE59}
 }
 
-// Declared 返回插件声明的权限（已展开旧名称、去重）。
+// Declared 返回插件声明的权限（已去重）。
 func (m Manifest) Declared() []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, p := range m.Permissions {
-		list := []string{p}
-		if l, ok := legacyPerms[p]; ok {
-			list = l
-		}
-		for _, x := range list {
-			if !seen[x] {
-				seen[x] = true
-				out = append(out, x)
-			}
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
 		}
 	}
 	return out
@@ -167,14 +160,4 @@ func ReadManifest(dir string) (Manifest, error) {
 		man.Main = "main.js"
 	}
 	return man, nil
-}
-
-// MigrateSidebarGrant 迁移已保存的旧侧栏偏好，不自动替扩展声明权限。
-func (m *Manager) migrateSidebarGrant(id string) {
-	if on, ok := m.enabled.Get("plugin.sidebar." + id).(bool); ok {
-		if m.enabled.Get(grantKey(id, PermSidebar)) == nil {
-			m.SetGranted(id, PermSidebar, on)
-		}
-		m.enabled.Delete("plugin.sidebar." + id)
-	}
 }

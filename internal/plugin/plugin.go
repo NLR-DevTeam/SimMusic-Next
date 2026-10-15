@@ -70,6 +70,8 @@ type runState struct {
 	done    chan struct{}
 	runtime *goja.Runtime
 	names   map[string]bool // 导出的函数名
+	// 本次运行启动的本机程序（sim.shell.spawn / exec）；停止时一并结束
+	children *children
 }
 
 func (p *Plugin) state() *runState {
@@ -254,6 +256,11 @@ func (p *Plugin) stop() {
 			rt.Interrupt(errors.New("plugin stopped"))
 		}
 		<-rs.done
+		// 停用、重载、覆盖安装、移除和退出都经过这里：扩展启动的一切进程在返回前已被强制结束，
+		// 它们占用的文件（包括扩展自带的程序）此后才能被替换或删除。
+		if rs.children != nil {
+			rs.children.killAll()
+		}
 	}
 }
 
@@ -268,11 +275,6 @@ func (p *Plugin) Has(name string) bool {
 
 // Call 调用插件导出函数；返回值为 JSON 兼容的 Go 值。若函数返回 Promise 则等待其完成。
 func (p *Plugin) Call(timeout time.Duration, name string, args ...any) (any, error) {
-	if name == "getDownload" || name == "getMusicInfo" && len(args) > 1 && args[1] == "download" {
-		if !p.DownloadAllowed() {
-			return nil, errors.New("扩展不支持下载或下载菜单权限已被撤销")
-		}
-	}
 	switch name {
 	case "getTrackActions", "onTrackAction":
 		if !p.HasPermission(PermTrackMenu) {
@@ -425,6 +427,9 @@ type Manager struct {
 	lifecycleMu sync.Mutex
 	loading     bool
 	webviews    WebviewBackend
+	admin       PluginAdmin
+	keepMu      sync.Mutex
+	kept        *Plugin // 发起本次变更的扩展：重启其余扩展时让它继续运行
 }
 
 // Host 是插件可调用的宿主能力（由 core 实现）。
@@ -509,7 +514,6 @@ func (m *Manager) add(fsys fs.FS, dir string, builtin bool) error {
 		return fmt.Errorf("插件 %s 已存在", man.ID)
 	}
 	p := &Plugin{Manifest: man, Dir: dir, Builtin: builtin, mgr: m, src: fsys}
-	m.migrateSidebarGrant(man.ID)
 	p.DataDir = filepath.Join(m.baseData, man.ID)
 	_ = os.MkdirAll(p.DataDir, 0o755)
 	p.Settings = config.Open(filepath.Join(p.DataDir, "settings.json"), nil)
@@ -630,7 +634,18 @@ func (m *Manager) Remove(id string) error {
 		return nil
 	}
 	m.RestartOrdered()
-	return os.RemoveAll(p.Dir)
+	return removeDir(p.Dir)
+}
+
+// removeDir deletes an extension's directory. A program of it that was just ended may hold its own file
+// for a moment longer, so a refusal is tried again for a short while.
+func removeDir(dir string) error {
+	err := os.RemoveAll(dir)
+	for attempt := 0; err != nil && attempt < 20; attempt++ {
+		time.Sleep(100 * time.Millisecond)
+		err = os.RemoveAll(dir)
+	}
+	return err
 }
 
 func (m *Manager) Get(id string) *Plugin {
@@ -665,6 +680,14 @@ func (m *Manager) StopAll() {
 	for _, p := range m.All() {
 		p.stop()
 	}
+}
+
+// restartable 报告重启全部扩展时是否也要重启 p：发起变更的扩展仍在列表中、仍启用且正在运行时保留。
+func (m *Manager) restartable(p *Plugin) bool {
+	m.mu.RLock()
+	kept := m.kept
+	m.mu.RUnlock()
+	return p != kept || !p.Running() || !m.IsEnabled(p.ID())
 }
 
 func copyDir(src, dst string) error {

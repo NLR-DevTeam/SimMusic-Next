@@ -44,8 +44,8 @@ func (a *App) localExts() []string {
 }
 
 // DropFiles handles paths dropped on the window while the page described by kind / pluginID / id is shown.
-// It returns the first .simex among them for the installer, and whether the page shown has changed.
-func (a *App) DropFiles(paths []string, kind, pluginID, id string) (simex string, refresh bool) {
+// It returns every .simex among them, in order, for the installer, and whether the page shown has changed.
+func (a *App) DropFiles(paths []string, kind, pluginID, id string) (simex []string, refresh bool) {
 	local := a.Plugins.Get(localPlugin)
 	running := local != nil && local.Running()
 	exts := a.localExts()
@@ -57,9 +57,7 @@ func (a *App) DropFiles(paths []string, kind, pluginID, id string) (simex string
 		case info.IsDir():
 			folders = append(folders, path)
 		case strings.EqualFold(filepath.Ext(path), ".simex"):
-			if simex == "" {
-				simex = path
-			}
+			simex = append(simex, path)
 		case slices.Contains(exts, strings.ToLower(filepath.Ext(path))):
 			audio = append(audio, path)
 		}

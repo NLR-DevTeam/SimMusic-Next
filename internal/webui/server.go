@@ -48,6 +48,7 @@ type UI struct {
 	musicInvalidations  []string
 	navigations         []map[string]string
 	dragPaths           []string
+	droppedPackages     []string
 	prompts             map[string]*promptRequest
 	covers              map[string][]byte
 	tracks              map[string]model.Track
@@ -77,6 +78,7 @@ func New(a *core.App, desk *desklyric.Window) *UI {
 	a.OnPrompt = u.Prompt
 	a.OnConfirm = u.Confirm
 	winx.Launch = u.launchFromHost
+	a.OnSongMenu = func() { u.playRequest(map[string]any{"kind": "songMenu", "scene": "outside"}) }
 	a.OnSidebarOpen = func(pluginID, id string) {
 		u.mu.Lock()
 		u.navigations = append(u.navigations, map[string]string{"plugin": pluginID, "id": id})
@@ -87,6 +89,7 @@ func New(a *core.App, desk *desklyric.Window) *UI {
 	a.DialogOwner = func() uintptr { return uintptr(u.hwnd.Load()) }
 	if a.Plugins != nil {
 		a.Plugins.SetWebviewBackend(u)
+		a.Plugins.SetPluginAdmin(u)
 	}
 	if desk != nil {
 		desk.OnControl = func(action string) {
@@ -294,7 +297,7 @@ func (u *UI) catalog() any {
 		if err := p.LoadErr(); err != nil {
 			errText = err.Error()
 		}
-		ps = append(ps, map[string]any{"manifest": p.Manifest, "builtin": p.Builtin, "development": p.Development, "enabled": u.app.Plugins.IsEnabled(p.ID()), "running": p.Running(), "canDownload": p.DownloadAllowed(), "permissions": u.permissions(p), "error": errText, "canSearch": p.Has("search"), "sidebar": u.app.Sidebar(p.ID())})
+		ps = append(ps, map[string]any{"manifest": p.Manifest, "builtin": p.Builtin, "development": p.Development, "enabled": u.app.Plugins.IsEnabled(p.ID()), "running": p.Running(), "permissions": u.permissions(p), "error": errText, "canSearch": p.Has("search"), "sidebar": u.app.Sidebar(p.ID())})
 	}
 	lists := u.app.Lists.All()
 	for _, l := range lists {
@@ -386,24 +389,30 @@ func (u *UI) call(q request) (any, error) {
 		u.dragPaths = nil
 		u.mu.Unlock()
 		simex, refresh := a.DropFiles(paths, q.Text, q.Plugin, q.ID)
-		result := map[string]any{"refresh": refresh}
-		if simex != "" {
-			file, err := os.Open(simex)
-			if err != nil {
-				return nil, err
-			}
-			defer file.Close()
-			dir, manifest, err := plugin.PreparePackage(file)
-			if err != nil {
-				return nil, err
-			}
-			install, err := u.setInstall(dir, manifest, false)
-			if err != nil {
-				return nil, err
-			}
-			result["install"] = install
+		// The packages wait here; the page takes them one by one, each through its own installer.
+		u.mu.Lock()
+		u.droppedPackages = simex
+		u.mu.Unlock()
+		return map[string]any{"refresh": refresh, "packages": len(simex)}, nil
+	case "nextDroppedPackage":
+		u.mu.Lock()
+		if len(u.droppedPackages) == 0 {
+			u.mu.Unlock()
+			return nil, nil
 		}
-		return result, nil
+		path := u.droppedPackages[0]
+		u.droppedPackages = u.droppedPackages[1:]
+		u.mu.Unlock()
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, errors.New("无法读取扩展包")
+		}
+		defer file.Close()
+		dir, manifest, err := plugin.PreparePackage(file)
+		if err != nil {
+			return nil, err
+		}
+		return u.setInstall(dir, manifest, false)
 	case "fonts":
 		return winx.Fonts(), nil
 	case "audioDevices":
@@ -545,11 +554,10 @@ func (u *UI) call(q request) (any, error) {
 	case "toast":
 		u.Toast(q.Text)
 	case "menu", "menuChildren":
-		// A menu of the host page, drawn as a window: { id, x, y, items }, and later the rows of a row
+		// A menu of the host page, drawn as a window where the pointer is: { id, items }, and later the rows of a row
 		// that reads them when opened: { id, path, items }.
 		var menu struct {
-			ID    int `json:"id"`
-			X, Y  float64
+			ID    int            `json:"id"`
 			Path  []int          `json:"path"`
 			Items []overlay.Item `json:"items"`
 		}
@@ -558,7 +566,7 @@ func (u *UI) call(q request) (any, error) {
 			return nil, errors.New("请求格式错误")
 		}
 		if q.Action == "menu" {
-			u.overlay.ShowMenu(menu.ID, menu.Items, menu.X, menu.Y)
+			u.overlay.ShowMenu(menu.ID, menu.Items)
 		} else {
 			u.overlay.SetChildren(menu.ID, menu.Path, menu.Items)
 		}
@@ -607,6 +615,11 @@ func (u *UI) call(q request) (any, error) {
 		case "size":
 			u.hostSend("win", q.ID, "size", strconv.Itoa(q.Index), strconv.Itoa(q.To))
 		case "show":
+			// A dialog is modal to the main window: asked for while that is in the tray or minimized (from a
+			// menu opened outside it), the window comes back with it.
+			if h := uintptr(u.hwnd.Load()); h != 0 && (!winx.IsVisible(h) || winx.IsIconic(h)) {
+				u.ShowWindow(true)
+			}
 			u.hostSend("win", q.ID, "show", "", "")
 		case "close":
 			u.hostSend("close", q.ID)
@@ -722,39 +735,9 @@ func (u *UI) call(q request) (any, error) {
 		}
 		u.clearInstall()
 	case "installPlugin":
-		u.mu.Lock()
-		if q.ID == "" || q.ID != u.pendingInstallToken {
-			u.mu.Unlock()
-			return nil, errors.New("请重新选择扩展并确认权限")
-		}
-		dir := u.pendingInstall
-		development, reviewed := u.pendingDevelopment, u.pendingManifest
-		u.pendingInstall = ""
-		u.pendingInstallToken = ""
-		u.mu.Unlock()
-		if dir == "" {
-			return nil, errors.New("请先选择扩展并确认权限")
-		}
-		if !development {
-			defer os.RemoveAll(dir)
-		}
-		current, err := plugin.ReadManifest(dir)
-		if err != nil {
+		if err := u.finishInstall(q.ID, q.Denied); err != nil {
 			return nil, err
 		}
-		if !plugin.SameManifest(current, reviewed) {
-			return nil, errors.New("扩展声明已改变，请重新选择并确认权限")
-		}
-		if development {
-			_, err = a.Plugins.LoadDevelopment(dir, q.Denied...)
-		} else {
-			_, err = a.Plugins.Install(dir, q.Denied...)
-		}
-		if err != nil {
-			return nil, err
-		}
-		a.InvalidateMusicResources(nil)
-		go a.ReloadMenus()
 	case "window":
 		u.window(q.Text)
 	case "moveDesktopLyrics":

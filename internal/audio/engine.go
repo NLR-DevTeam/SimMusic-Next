@@ -49,7 +49,8 @@ type Engine struct {
 	fadeOn   bool
 	speed    float64
 
-	eq *Equalizer
+	eq    *Equalizer
+	scope scope
 
 	// OnEnded 在当前曲目自然播放结束时调用（在独立 goroutine 中）。
 	OnEnded func()
@@ -233,6 +234,7 @@ func (e *Engine) Stream(samples [][2]float64) (int, bool) {
 	defer e.mu.Unlock()
 	if e.res == nil || (!e.playing && e.gain <= 0) {
 		clear(samples)
+		e.scope.record(samples)
 		return len(samples), true
 	}
 	n, ok := e.res.Stream(samples)
@@ -259,6 +261,7 @@ func (e *Engine) Stream(samples [][2]float64) (int, bool) {
 		}
 	}
 	e.eq.Process(samples[:n])
+	e.scope.record(samples)
 	vol := e.volume * e.volume // 感知音量曲线
 	for i := range samples[:n] {
 		if e.fadeStep != 0 {

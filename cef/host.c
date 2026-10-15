@@ -26,6 +26,8 @@
 #include "include/capi/cef_display_handler_capi.h"
 #include "include/capi/cef_request_handler_capi.h"
 #include "include/capi/cef_render_handler_capi.h"
+#include "include/capi/cef_request_context_capi.h"
+#include "include/capi/cef_values_capi.h"
 
 static __typeof__(&cef_execute_process) executeProcess;
 static __typeof__(&cef_initialize) initializeCef;
@@ -68,6 +70,7 @@ static void maybeQuit(void);
 static void hostCommand(char *line);
 static int panelDragAt(LPARAM point);
 static void stepSlides(void);
+static void checkSeen(void);
 static void reportFullscreen(int enabled);
 static int openDialogPopup(const cef_string_t *name, const cef_popup_features_t *features, cef_window_info_t *info, cef_client_t **newClient, cef_browser_settings_t *settings);
 static int mainClosed;
@@ -203,7 +206,14 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
     case WM_ACTIVATE:
     case WM_DWMCOMPOSITIONCHANGED:
         applyFrame(window);
+        if (window == mainWindow) checkSeen();
         break;
+    case WM_WINDOWPOSCHANGED:
+        if (window == mainWindow) checkSeen();
+        break;
+    case WM_TIMER:
+        if (wParam == 1) checkSeen();
+        return 0;
     case WM_ERASEBKGND:
         return 1;
     case WM_PAINT: {
@@ -396,7 +406,27 @@ static void setMainFullscreen(int enabled) {
 }
 static void CEF_CALLBACK fullscreenChanged(cef_display_handler_t *self, cef_browser_t *browser, int enabled) { setMainFullscreen(enabled); }
 static cef_browser_process_handler_t *CEF_CALLBACK getProcess(cef_app_t *self) { return &processHandler; }
+static __typeof__(&cef_value_create) createValue;
+static __typeof__(&cef_request_context_get_global_context) globalContext;
+// No spell checking and no form or password autofill, in the interface and in extension pages alike:
+// nothing typed here is prose, and nothing typed should be remembered and offered again.
+static void quietContext(cef_request_context_t *context) {
+    static const wchar_t *names[] = { L"browser.enable_spellchecking", L"spellcheck.use_spelling_service", L"autofill.enabled", L"autofill.profile_enabled",
+        L"autofill.credit_card_enabled", L"credentials_enable_service", L"credentials_enable_autosignin" };
+    if (!context) return;
+    for (int i = 0; i < (int)(sizeof(names) / sizeof(*names)); i++) {
+        cef_string_t name = cefString(names[i]), error = {0};
+        if (!context->has_preference(context, &name)) continue;
+        cef_value_t *value = createValue();
+        value->set_bool(value, 0);
+        context->set_preference(context, &name, value, &error);
+        if (error.dtor) error.dtor(error.str);
+    }
+}
 static void CEF_CALLBACK contextInitialized(cef_browser_process_handler_t *self) {
+    cef_request_context_t *shared = globalContext();
+    quietContext(shared);
+    if (shared) shared->base.release(&shared->base);
     WNDCLASSEXW windowClass = { .cbSize = sizeof(WNDCLASSEXW), .style = CS_DBLCLKS, .lpfnWndProc = windowProc,
         .hInstance = GetModuleHandleW(NULL), .hCursor = LoadCursorW(NULL, IDC_ARROW), .hbrBackground = GetStockObject(BLACK_BRUSH), .lpszClassName = L"SimMusicCefWindow" };
     windowClass.hIcon = LoadIconW(windowClass.hInstance, MAKEINTRESOURCEW(1));
@@ -479,6 +509,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR commandLine, 
     LOAD(listValue, "cef_string_list_value"); LOAD(listFree, "cef_string_list_free");
     LOAD(createBrowserSync, "cef_browser_host_create_browser_sync"); LOAD(createContext, "cef_request_context_create_context");
     LOAD(createDictionary, "cef_dictionary_value_create"); LOAD(createProcessMessage, "cef_process_message_create");
+    LOAD(createValue, "cef_value_create"); LOAD(globalContext, "cef_request_context_get_global_context");
     LOAD(createV8Function, "cef_v8value_create_function"); LOAD(currentV8Context, "cef_v8context_get_current_context");
     if (strcmp(apiHash(0), CEF_API_HASH_PLATFORM)) { fprintf(stderr, "CEF API hash mismatch\n"); return 3; }
     initBase(&app.base, sizeof(app)); initBase(&processHandler.base, sizeof(processHandler));

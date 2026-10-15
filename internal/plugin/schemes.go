@@ -25,7 +25,6 @@ type SchemeBinding struct {
 	Plugin      *Plugin
 	Declaration SchemeDeclaration
 	Extension   bool
-	Legacy      bool
 }
 
 type Scheme struct {
@@ -34,12 +33,9 @@ type Scheme struct {
 }
 
 var schemeName = regexp.MustCompile(`^[a-z][a-z0-9+.-]*$`)
-var schemeFunctions = []string{"getMusicInfo", "getStream", "getLyrics", "getCover", "getDownload", "getTrackActions", "onTrackAction"}
+var schemeFunctions = []string{"getMusicInfo", "getDownload", "getTrackActions", "onTrackAction"}
 
 func (b SchemeBinding) MenuPrefix() string {
-	if b.Legacy {
-		return ""
-	}
 	return "scheme:" + b.Declaration.Scheme + "/"
 }
 
@@ -102,7 +98,7 @@ func (s *Scheme) downloadBinding() (SchemeBinding, bool) {
 			return b, *b.Declaration.Download
 		}
 		if !b.Extension {
-			return b, b.Declaration.Handlers["getDownload"] != ""
+			return b, false
 		}
 	}
 	return SchemeBinding{}, false
@@ -113,19 +109,12 @@ func (s *Scheme) DownloadAllowed() bool {
 	if !on || !s.Has("getMusicInfo") && !s.Has("getDownload") {
 		return false
 	}
-	if b.Legacy {
-		return b.Plugin.DownloadAllowed()
-	}
 	return b.Plugin.TrackMenuGranted(b.MenuPrefix() + "download")
 }
 
 func (s *Scheme) Version() string {
 	if s == nil {
 		return ""
-	}
-	// Keep old cache keys valid for extensions using their implicit ID protocol.
-	if len(s.Bindings) == 1 && s.Bindings[0].Legacy {
-		return s.Bindings[0].Plugin.Manifest.Version
 	}
 	var parts []string
 	for _, b := range s.Bindings {
@@ -172,7 +161,7 @@ func (m *Manager) Schemes() map[string]any {
 }
 
 func (m *Manager) SourcesFor(id string) map[string]bool {
-	out := map[string]bool{id: true}
+	out := map[string]bool{}
 	m.schemeMu.RLock()
 	defer m.schemeMu.RUnlock()
 	for name, s := range m.schemes {
@@ -190,10 +179,6 @@ func (m *Manager) SourcesFor(id string) map[string]bool {
 // partial protocols or patches behind, and the extension is marked failed.
 func (m *Manager) registerSchemes(p *Plugin) error {
 	owned := p.Manifest.Schemes
-	legacy := len(owned) == 0 && len(p.Manifest.SchemeExtensions) == 0
-	if legacy {
-		owned = []SchemeDeclaration{{Scheme: p.ID(), Download: p.Manifest.Capabilities.Download}}
-	}
 	m.schemeMu.Lock()
 	defer m.schemeMu.Unlock()
 	pending := map[string]*Scheme{}
@@ -204,7 +189,7 @@ func (m *Manager) registerSchemes(p *Plugin) error {
 		return m.schemes[name]
 	}
 	add := func(d SchemeDeclaration, extension bool) error {
-		if !legacy && !schemeName.MatchString(d.Scheme) {
+		if !schemeName.MatchString(d.Scheme) {
 			return fmt.Errorf("无效 scheme：%s", d.Scheme)
 		}
 		s := get(d.Scheme)
@@ -245,7 +230,7 @@ func (m *Manager) registerSchemes(p *Plugin) error {
 		} else {
 			s = &Scheme{Name: s.Name, Bindings: append([]SchemeBinding(nil), s.Bindings...)}
 		}
-		s.Bindings = append(s.Bindings, SchemeBinding{Plugin: p, Declaration: d, Extension: extension, Legacy: legacy})
+		s.Bindings = append(s.Bindings, SchemeBinding{Plugin: p, Declaration: d, Extension: extension})
 		pending[d.Scheme] = s
 		return nil
 	}
@@ -305,10 +290,14 @@ func (m *Manager) ordered() {
 func (m *Manager) RestartOrdered() {
 	m.lifecycleMu.Lock()
 	defer m.lifecycleMu.Unlock()
-	m.StopAll()
+	for _, p := range m.All() {
+		if m.restartable(p) {
+			p.stop()
+		}
+	}
 	m.ordered()
 	for _, p := range m.All() {
-		if !m.IsEnabled(p.ID()) {
+		if !m.IsEnabled(p.ID()) || !m.restartable(p) {
 			continue
 		}
 		err := p.start()
@@ -338,10 +327,10 @@ func (m *Manager) SetOrder(ids []string) error {
 	return nil
 }
 
-// ValidateTracks keeps Source as the protocol name; old extensions may omit it
-// only when their default protocol is unambiguous.
+// ValidateTracks keeps Source as the protocol name; an extension that registers exactly one protocol
+// may leave it out.
 func (m *Manager) ValidateTracks(p *Plugin, tracks []model.Track) error {
-	defaultName := p.ID()
+	defaultName := ""
 	if len(p.Manifest.Schemes) == 1 {
 		defaultName = p.Manifest.Schemes[0].Scheme
 	}

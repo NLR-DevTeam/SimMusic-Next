@@ -230,85 +230,39 @@ func (a *App) fetchInfo(s *plugin.Scheme, refs []model.Track, scene string) ([]m
 	if s == nil {
 		return nil, errors.New("协议未注册")
 	}
-	if s.Has("getMusicInfo") {
-		ids := make([]string, len(refs))
-		for i, t := range refs {
-			ids[i] = t.ID
-		}
-		var out []map[string]json.RawMessage
-		err := s.CallInto(time.Minute, &out, "getMusicInfo", ids, scene)
-		if err != nil {
-			return nil, err
-		}
-		p, _ := s.Handler("getMusicInfo")
-		for _, fields := range out {
-			if err := a.normalizeInfo(p, fields); err != nil {
-				return nil, err
-			}
-		}
-		// A separately registered download handler overrides that scene's resource.
-		if scene == "download" && s.Has("getDownload") {
-			for _, fields := range out {
-				var id string
-				json.Unmarshal(fields["id"], &id)
-				t := model.Track{Source: s.Name, ID: id}
-				for _, ref := range refs {
-					if ref.ID == id {
-						t = ref
-						break
-					}
-				}
-				if err := a.fetchDownload(s, t, fields); err != nil {
-					return nil, err
-				}
-			}
-		}
-		return out, nil
+	if !s.Has("getMusicInfo") {
+		return nil, errors.New("协议未提供 getMusicInfo")
 	}
-	// Legacy extensions remain supported through the same host cache and scene resolver.
-	out := make([]map[string]json.RawMessage, 0, len(refs))
-	for _, t := range refs {
-		b, _ := json.Marshal(t)
-		fields := map[string]json.RawMessage{}
-		json.Unmarshal(b, &fields)
-		if scene == "play" || scene == "download" {
-			var stream model.StreamInfo
-			if err := s.CallInto(time.Minute, &stream, "getStream", t); err != nil {
-				return nil, err
-			}
-			fields["playback"], _ = json.Marshal(model.Resource{Path: stream.Path, URL: stream.URL, Headers: stream.Headers})
-			fields["format"], _ = json.Marshal(stream.Format)
-			var lrc string
-			_ = s.CallInto(30*time.Second, &lrc, "getLyrics", t)
-			fields["lyrics"], _ = json.Marshal(lrc)
-		}
-		p := s.Bindings[0].Plugin
-		for _, name := range []string{"getStream", "getLyrics"} {
-			if provider, _ := s.Handler(name); provider != nil {
-				key := "playback"
-				if name == "getLyrics" {
-					key = "lyrics"
-				}
-				if raw, ok := fields[key]; ok {
-					one := map[string]json.RawMessage{key: raw}
-					if err := a.normalizeInfo(provider, one); err != nil {
-						return nil, err
-					}
-					fields[key] = one[key]
-				}
-			}
-		}
-		covers := map[string]json.RawMessage{"cover": fields["cover"]}
-		if err := a.normalizeInfo(p, covers); err != nil {
+	ids := make([]string, len(refs))
+	for i, t := range refs {
+		ids[i] = t.ID
+	}
+	var out []map[string]json.RawMessage
+	if err := s.CallInto(time.Minute, &out, "getMusicInfo", ids, scene); err != nil {
+		return nil, err
+	}
+	p, _ := s.Handler("getMusicInfo")
+	for _, fields := range out {
+		if err := a.normalizeInfo(p, fields); err != nil {
 			return nil, err
 		}
-		fields["cover"] = covers["cover"]
-		if scene == "download" && s.Has("getDownload") {
+	}
+	// A separately registered download handler overrides that scene's resource.
+	if scene == "download" && s.Has("getDownload") {
+		for _, fields := range out {
+			var id string
+			json.Unmarshal(fields["id"], &id)
+			t := model.Track{Source: s.Name, ID: id}
+			for _, ref := range refs {
+				if ref.ID == id {
+					t = ref
+					break
+				}
+			}
 			if err := a.fetchDownload(s, t, fields); err != nil {
 				return nil, err
 			}
 		}
-		out = append(out, fields)
 	}
 	return out, nil
 }

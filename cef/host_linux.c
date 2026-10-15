@@ -479,7 +479,6 @@ static void showSleepWindow(void) {
     gtk_window_set_keep_above(GTK_WINDOW(sleepWindow), TRUE);
     gtk_window_set_skip_taskbar_hint(GTK_WINDOW(sleepWindow), TRUE);
     GdkRectangle screen = {0};
-    GdkWindow *of = mainWindow ? gtk_widget_get_window(mainWindow) : NULL;
     GdkMonitor *monitor = of ? gdk_display_get_monitor_at_window(gdk_display_get_default(), of) : gdk_display_get_primary_monitor(gdk_display_get_default());
     if (monitor) gdk_monitor_get_geometry(monitor, &screen);
     gtk_window_move(GTK_WINDOW(sleepWindow), screen.x, screen.y);
@@ -1086,6 +1085,22 @@ static CookieCallback *cookieCallback(const char *request, int visitor) {
     return callback;
 }
 // Each extension has its own browser storage, kept under the given directory.
+// No spell checking and no form or password autofill, in the interface and in extension pages alike.
+static void quietContext(cef_request_context_t *context) {
+    static const char *names[] = { "browser.enable_spellchecking", "spellcheck.use_spelling_service", "autofill.enabled", "autofill.profile_enabled",
+        "autofill.credit_card_enabled", "credentials_enable_service", "credentials_enable_autosignin" };
+    if (!context) return;
+    for (int i = 0; i < (int)(sizeof(names) / sizeof(*names)); i++) {
+        cef_string_t name = make(names[i]), error = {0};
+        if (context->has_preference(context, &name)) {
+            cef_value_t *value = cef_value_create();
+            value->set_bool(value, 0);
+            context->set_preference(context, &name, value, &error);
+            drop(&error);
+        }
+        drop(&name);
+    }
+}
 static cef_request_context_t *partition(const char *path) {
     int count = sizeof(partitions) / sizeof(*partitions);
     for (int i = 0; i < count; i++) {
@@ -1096,6 +1111,7 @@ static cef_request_context_t *partition(const char *path) {
         cef_request_context_t *context = cef_request_context_create_context(&settings, NULL);
         drop(&settings.cache_path);
         if (!context) break;
+        quietContext(context);
         partitions[i].path = strdup(path);
         partitions[i].context = context;
         return context;
@@ -1244,8 +1260,7 @@ static GtkWidget *menuTop;
 static GHashTable *menuLists;   // path of a row → the list of its children; "" is the top list
 static GtkCssProvider *styleProvider;
 static char *styleFamily;
-static int menuId, menuActed, menuScreen;
-static double menuX, menuY;
+static int menuId, menuActed;
 static guint menuWait;
 
 static void applyStyle(const char *family) {
@@ -1345,30 +1360,25 @@ static gboolean popupMenu(gpointer data) {
     gdk_device_get_state(gdk_seat_get_pointer(seat), gdk_get_default_root_window(), NULL, &buttons);
     if (buttons & (GDK_BUTTON1_MASK | GDK_BUTTON2_MASK | GDK_BUTTON3_MASK)) return G_SOURCE_CONTINUE;
     menuWait = 0;
-    GdkWindow *of = mainWindow ? gtk_widget_get_window(mainWindow) : NULL;
-    if (menuScreen || !of || !gtk_widget_get_visible(mainWindow)) gtk_menu_popup_at_pointer(GTK_MENU(menuTop), NULL);
-    else {
-        GdkRectangle at = { units(menuX), units(menuY), 1, 1 };
-        gtk_menu_popup_at_rect(GTK_MENU(menuTop), of, &at, GDK_GRAVITY_NORTH_WEST, GDK_GRAVITY_NORTH_WEST, NULL);
-    }
+    gtk_menu_popup_at_pointer(GTK_MENU(menuTop), NULL);
     return G_SOURCE_REMOVE;
 }
 static void addMenuRows(char **f, int count) {
     for (int i = 0; i + 3 < count; i += 4) addMenuRow(f[i], atoi(f[i + 1]), f[i + 2], f[i + 3]);
 }
 static void menuCommand(char **f, int count) {
-    // show id screen x y family rows… | children id path rows… | close
+    // show id family rows… | children id path rows… | close; a menu opens where the pointer is
     if (count < 1) return;
     if (!strcmp(f[0], "close")) { closeMenu(); return; }
-    if (!strcmp(f[0], "show") && count >= 6) {
+    if (!strcmp(f[0], "show") && count >= 3) {
         closeMenu();
-        menuId = atoi(f[1]); menuScreen = f[2][0] == '1'; menuX = atof(f[3]); menuY = atof(f[4]); menuActed = 0;
-        applyStyle(f[5]);
+        menuId = atoi(f[1]); menuActed = 0;
+        applyStyle(f[2]);
         menuTop = newMenuList();
         g_object_ref_sink(menuTop);
         menuLists = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
         g_hash_table_insert(menuLists, g_strdup(""), menuTop);
-        addMenuRows(f + 6, count - 6);
+        addMenuRows(f + 3, count - 3);
         g_signal_connect(menuTop, "deactivate", G_CALLBACK(menuDeactivate), NULL);
         menuWait = g_timeout_add(15, popupMenu, NULL);
     } else if (!strcmp(f[0], "children") && count >= 3 && menuTop && atoi(f[1]) == menuId) {

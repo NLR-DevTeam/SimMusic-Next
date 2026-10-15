@@ -32,7 +32,7 @@ func TestRestoreLyricsFromPersistentIndexAndPlugin(t *testing.T) {
 	makeRestored := func() (*App, *plugin.Plugin) {
 		b := &App{DataDir: a.DataDir, State: config.Open(filepath.Join(a.DataDir, "state.json"), nil), Cfg: config.Open(filepath.Join(a.DataDir, "config.json"), Defaults), Engine: &audio.Engine{}}
 		b.Plugins = plugin.NewManager(filepath.Join(a.DataDir, "plugin-data"), filepath.Join(a.DataDir, "plugins"), b.State, nil)
-		man := plugin.Manifest{ID: "test", Version: "1"}
+		man := plugin.Manifest{ID: "test", Version: "1", Schemes: []plugin.SchemeDeclaration{{Scheme: "test"}}}
 		data, _ := json.Marshal(man)
 		if err := b.Plugins.AddBuiltin(fstest.MapFS{"plugin.json": {Data: data}, "main.js": {Data: []byte(musicScript)}}); err != nil {
 			t.Fatal(err)

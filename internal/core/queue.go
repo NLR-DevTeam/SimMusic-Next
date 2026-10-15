@@ -2,6 +2,8 @@ package core
 
 import (
 	"math/rand/v2"
+	"slices"
+
 	"simmusic/internal/model"
 )
 
@@ -98,4 +100,76 @@ func moveItem[T any](items []T, from, to int) []T {
 	item := out[from]
 	out = append(out[:from], out[from+1:]...)
 	return append(out[:to], append([]T{item}, out[to:]...)...)
+}
+
+// SetQueue replaces the queue by tracks, in this order, and makes the song at index the current one; index -1
+// is the current song when tracks hold it, the first otherwise. When that song is current already it goes on
+// undisturbed, and position and play, when given, move it and start or pause it; a song that becomes current
+// is opened at position, and played unless play is false.
+func (a *App) SetQueue(tracks []model.Track, index int, position *float64, play *bool) {
+	if len(tracks) == 0 {
+		a.ClearQueue()
+		return
+	}
+	a.mu.Lock()
+	current := ""
+	if a.index >= 0 && a.index < len(a.queue) {
+		current = a.queue[a.index].Key()
+	}
+	if index < 0 {
+		index = 0
+		for i, t := range tracks {
+			if t.Key() == current {
+				index = i
+				break
+			}
+		}
+	}
+	tracks, index = uniqueTracks(tracks, min(index, len(tracks)-1))
+	a.shuffle = keptShuffle(a.queue, a.shuffle, tracks)
+	a.queue = tracks
+	if tracks[index].Key() == current {
+		a.index = index
+		a.mu.Unlock()
+		if position != nil {
+			a.Seek(max(0, *position))
+		}
+		if play != nil && a.Snapshot().Playing != *play {
+			a.TogglePlay()
+		}
+		a.saveQueue()
+		a.redraw()
+		return
+	}
+	a.index = -1
+	a.mu.Unlock()
+	start := 0.0
+	if position != nil {
+		start = max(0, *position)
+	}
+	a.startTrackAt(index, play == nil || *play, start, true)
+}
+
+// keptShuffle is the random order of next: the songs prev held keep their order among themselves, the new
+// ones follow in a random order of their own.
+func keptShuffle(prev []model.Track, order []int, next []model.Track) []int {
+	rank := map[string]int{}
+	for r, normal := range order {
+		if normal < len(prev) {
+			rank[prev[normal].Key()] = r
+		}
+	}
+	var kept, added []int
+	for i, t := range next {
+		if _, ok := rank[t.Key()]; ok {
+			kept = append(kept, i)
+		} else {
+			added = append(added, i)
+		}
+	}
+	slices.SortFunc(kept, func(x, y int) int { return rank[next[x].Key()] - rank[next[y].Key()] })
+	for _, i := range newShuffle(len(added)) {
+		kept = append(kept, added[i])
+	}
+	return kept
 }
