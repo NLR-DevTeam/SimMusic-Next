@@ -349,6 +349,29 @@ func (p *Plugin) installPlayer(rs *runState, sim *goja.Object) {
 	player.Set("setQueue", queueOp("set"))
 	player.Set("append", queueOp("append"))
 	player.Set("playNext", queueOp("playNext"))
+	// The native list menu, with its complete list context and the selected songs. The core
+	// validates protocol ownership and selection membership before handing anything to the UI.
+	player.Set("showTrackMenu", func(call goja.FunctionCall) goja.Value {
+		h := host()
+		menuHost, ok := h.(interface {
+			PlayerTrackMenu(*Plugin, []model.Track, []model.Track) error
+		})
+		if !ok {
+			p.throw(errors.New("当前宿主不支持歌曲列表菜单，请更新主程序"))
+		}
+		list, err := QueueRefs(exportJSON(call.Argument(0)))
+		if err != nil {
+			p.throw(err)
+		}
+		selected, err := QueueRefs(exportJSON(call.Argument(1)))
+		if err != nil {
+			p.throw(err)
+		}
+		return p.async(func() (any, error) {
+			err := menuHost.PlayerTrackMenu(p, list, selected)
+			return err == nil, err
+		})
+	})
 	// playback(track?) is the audio a song of the queue is played from, the current one when no song is
 	// given: Promise<File | { url, headers }>, as getMusicInfo hands it over in "playback".
 	player.Set("playback", func(call goja.FunctionCall) goja.Value {

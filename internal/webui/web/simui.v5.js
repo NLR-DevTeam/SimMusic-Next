@@ -436,7 +436,7 @@ window.su5 = {
 			const document = dropdown.ownerDocument, window = document.defaultView;
 			document.querySelectorAll(".dropdown.active").forEach(ele => this.hide(ele));
 			this.activeDropdown = dropdown;
-			if (!x || !y) {
+			if (!Number.isFinite(x) || !Number.isFinite(y)) {
 				const trigger = dropdown.trigger;
 				const rect = trigger.getBoundingClientRect();
 				trigger.classList.add("dropdownActive");

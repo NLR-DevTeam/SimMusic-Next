@@ -33,6 +33,22 @@ func clearRuntimeCache(dataDir, name string) error {
 		kept := false
 		for _, entry := range entries {
 			if name == "cef-cache" && entry.Name() == "webview" && entry.IsDir() {
+				// Remove only reproducible browser caches, never extension cookies,
+				// localStorage, IndexedDB or other persistent website data.
+				partitions, err := os.ReadDir(filepath.Join(target, "webview"))
+				if err != nil {
+					return err
+				}
+				for _, partition := range partitions {
+					if !partition.IsDir() || partition.Type()&os.ModeSymlink != 0 {
+						continue
+					}
+					for _, cache := range []string{"Cache", "Code Cache", "GPUCache", "DawnCache"} {
+						if err := os.RemoveAll(filepath.Join(target, "webview", partition.Name(), cache)); err != nil {
+							return err
+						}
+					}
+				}
 				kept = true
 				continue
 			}

@@ -39,16 +39,15 @@ func (a *App) PlayerQueue(p *plugin.Plugin, op string, refs []model.Track, optio
 		tracks[i] = own[0]
 		fresh = append(fresh, i)
 	}
-	// New songs come with what the index knows of them, as songs from a list do.
+	// Queue changes must not wait for metadata for an entire remote list. The current song is
+	// resolved by startTrackAt; visible queue rows request their missing metadata in the background.
 	if len(fresh) > 0 {
 		refs := make([]model.Track, len(fresh))
 		for i, at := range fresh {
 			refs[i] = tracks[at]
 		}
-		if known, err := a.GetMusicInfo(refs, "list"); err == nil && len(known) == len(refs) {
-			for i, at := range fresh {
-				tracks[at] = known[i]
-			}
+		for i, known := range a.cachedTrackRefs(refs) {
+			tracks[fresh[i]] = known
 		}
 	}
 	switch op {

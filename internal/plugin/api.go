@@ -504,6 +504,20 @@ func (p *Plugin) installAPI(rs *runState) {
 	// ----- 对话框 -----
 	dlg := rt.NewObject()
 	sim.Set("dialog", dlg)
+	dlg.Set("form", func(form DialogForm) goja.Value {
+		if err := form.Validate(); err != nil {
+			p.throw(err)
+		}
+		return p.async(func() (any, error) {
+			host, ok := p.mgr.Host.(interface {
+				DialogForm(DialogForm) (map[string]string, error)
+			})
+			if !ok {
+				return nil, errors.New("当前宿主不支持表单对话框，请更新主程序")
+			}
+			return host.DialogForm(form)
+		})
+	})
 	dlg.Set("prompt", func(title, placeholder, value string) goja.Value {
 		return p.async(func() (any, error) {
 			host, ok := p.mgr.Host.(interface {

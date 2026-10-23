@@ -3,21 +3,36 @@ package webui
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"simmusic/internal/plugin"
 	"time"
 )
 
 type promptRequest struct {
-	ID          string `json:"id"`
-	Kind        string `json:"kind,omitempty"` // "confirm" asks yes or no; Title then holds the question
-	Title       string `json:"title"`
-	Placeholder string `json:"placeholder"`
-	Value       string `json:"value"`
+	ID          string             `json:"id"`
+	Kind        string             `json:"kind,omitempty"` // "confirm" asks yes or no; Title then holds the question
+	Title       string             `json:"title"`
+	Placeholder string             `json:"placeholder"`
+	Value       string             `json:"value"`
+	Form        *plugin.DialogForm `json:"form,omitempty"`
 	result      chan string
 }
 
 func (u *UI) Prompt(title, placeholder, value string) (string, error) {
 	return u.ask(&promptRequest{Title: title, Placeholder: placeholder, Value: value})
+}
+
+func (u *UI) DialogForm(form plugin.DialogForm) (map[string]string, error) {
+	answer, err := u.ask(&promptRequest{Kind: "form", Form: &form})
+	if err != nil || answer == "" {
+		return nil, err
+	}
+	var values map[string]string
+	if err = json.Unmarshal([]byte(answer), &values); err != nil {
+		return nil, err
+	}
+	return values, nil
 }
 
 func (u *UI) Confirm(text string) (bool, error) {

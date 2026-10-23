@@ -337,7 +337,17 @@ func open(src Source) (beep.StreamSeekCloser, beep.Format, io.Closer, error) {
 	)
 	switch kind {
 	case "mp3":
-		dec, fm, err = mp3.Decode(rsc)
+		// Over the network, decoded as it arrives (mp3stream.go); a file it cannot read goes the usual way.
+		if stream, ok := rsc.(*HTTPReader); ok {
+			if dec, fm, err = decodeMP3Stream(stream, stream.size()); err != nil {
+				log.Printf("audio: mp3 not streamed: %v", err)
+				if _, err = rsc.Seek(0, io.SeekStart); err == nil {
+					dec, fm, err = mp3.Decode(rsc)
+				}
+			}
+		} else {
+			dec, fm, err = mp3.Decode(rsc)
+		}
 	case "flac":
 		dec, fm, err = flac.Decode(bufReadSeeker(rsc))
 	case "ogg":
@@ -456,6 +466,13 @@ func (h *HTTPReader) pump() {
 		h.cond.Broadcast()
 		h.mu.Unlock()
 	}
+}
+
+// size is the length of the file as the server announced it; 0 when it did not.
+func (h *HTTPReader) size() int64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return max(0, h.total)
 }
 
 func (h *HTTPReader) Read(p []byte) (int, error) {

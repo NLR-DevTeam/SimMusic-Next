@@ -63,6 +63,7 @@ h3 { font-size: 1em; font-weight: 400; }
 .searchTitle .inputGroup .sourceSelect { width: 150px; flex-shrink: 0; }
 .searchTitle .inputGroup .searchField { max-width: 500px; width: 100%; }
 .searchTitle .inputGroup button { padding: 0 20px; }
+.searchTitle .inputGroup > .input, .searchTitle .inputGroup > button { height: 37px; min-height: 37px; }
 .plainButton { border: 0; background: transparent; padding: 0; color: inherit; }
 .iconButton { background: transparent; color: inherit; padding: 0; margin: 0; display: inline-flex; align-items: center; justify-content: center; font-family: inherit; font-weight: 400; cursor: default; }
 .quietButton { background: transparent; color: inherit; padding: 0 10px; font-size: .9em; }

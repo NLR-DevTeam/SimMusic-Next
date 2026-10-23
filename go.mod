@@ -13,6 +13,7 @@ require (
 	github.com/ebitengine/oto/v3 v3.3.2
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/gopxl/beep/v2 v2.1.1
+	github.com/hajimehoshi/go-mp3 v0.3.4
 	github.com/tc-hib/winres v0.3.1
 	golang.org/x/image v0.46.0
 	golang.org/x/sys v0.48.0
@@ -23,7 +24,6 @@ require (
 	github.com/ebitengine/purego v0.8.0 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.4+incompatible // indirect
 	github.com/google/pprof v0.0.0-20240727154555-813a5fbdbec8 // indirect
-	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
 	github.com/icza/bitio v1.1.0 // indirect
 	github.com/jfreymuth/oggvorbis v1.0.5 // indirect
 	github.com/jfreymuth/vorbis v1.0.2 // indirect

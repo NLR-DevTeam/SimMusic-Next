@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"simmusic/internal/core"
 	"simmusic/internal/desklyric"
@@ -76,9 +77,14 @@ func New(a *core.App, desk *desklyric.Window) *UI {
 	a.OnToast = u.Toast
 	a.OnAlert = u.Alert
 	a.OnPrompt = u.Prompt
+	a.OnDialogForm = u.DialogForm
 	a.OnConfirm = u.Confirm
 	winx.Launch = u.launchFromHost
 	a.OnSongMenu = func() { u.playRequest(map[string]any{"kind": "songMenu", "scene": "outside"}) }
+	a.OnTrackMenu = func(list, selected []model.Track) {
+		u.remember(selected)
+		u.playRequest(map[string]any{"kind": "trackMenu", "list": list, "selected": selected})
+	}
 	a.OnSidebarOpen = func(pluginID, id string) {
 		u.mu.Lock()
 		u.navigations = append(u.navigations, map[string]string{"plugin": pluginID, "id": id})
@@ -117,8 +123,15 @@ func New(a *core.App, desk *desklyric.Window) *UI {
 	return u
 }
 
-func (u *UI) Invalidate()      {}
-func (u *UI) Toast(msg string) { u.overlay.Toast(msg) }
+func (u *UI) Invalidate() {}
+func (u *UI) Toast(msg string) {
+	msg = strings.TrimRightFunc(msg, func(r rune) bool {
+		return unicode.IsSpace(r) || strings.ContainsRune("。．.!！?？,，;；:：、…", r)
+	})
+	if msg != "" {
+		u.overlay.Toast(msg)
+	}
+}
 
 // ShowPointerMenu opens one of the application's own menus where the pointer is, as the tray icon's menu:
 // an empty label is a separator, choose gets the index of the label chosen.

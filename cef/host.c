@@ -41,6 +41,7 @@ static __typeof__(&cef_string_list_alloc) listAlloc;
 static __typeof__(&cef_string_list_size) listSize;
 static __typeof__(&cef_string_list_value) listValue;
 static __typeof__(&cef_string_list_free) listFree;
+static __typeof__(&cef_dictionary_value_create) createDictionary;
 static HWND mainWindow, browserWindow;
 static HWND sleepWindow;
 static cef_browser_t *sleepBrowser;
@@ -74,6 +75,7 @@ static void checkSeen(void);
 static void reportFullscreen(int enabled);
 static int openDialogPopup(const cef_string_t *name, const cef_popup_features_t *features, cef_window_info_t *info, cef_client_t **newClient, cef_browser_settings_t *settings);
 static int mainClosed;
+static int mainUnseen;
 
 // Static callback objects have process lifetime and retain the owner reference.
 static void CEF_CALLBACK addRef(cef_base_ref_counted_t *self) { (void)self; }
@@ -95,6 +97,31 @@ static cef_string_t cefString(const wchar_t *text) {
 }
 static void releaseCef(void *object) {
     if (object) { cef_base_ref_counted_t *base = object; base->release(base); }
+}
+// CEF 106's WasHidden only supports windowless browsers. Neither a zero-sized
+// wrapper nor hiding its HWND updates WebContents visibility for native children.
+// Use the embedded protocol (no debug port or DevTools window) to mark it hidden,
+// then immediately unfreeze it so background messages/network still work. The
+// visibility override restores rendering without moving or focusing a native window.
+static void browserLifecycle(cef_browser_host_t *host, const wchar_t *state) {
+    cef_dictionary_value_t *params = createDictionary();
+    cef_string_t key = cefString(L"state"), value = cefString(state), method = cefString(L"Page.setWebLifecycleState");
+    params->set_string(params, &key, &value);
+    // CEF's C API consumes the dictionary reference passed across this boundary.
+    host->execute_dev_tools_method(host, 0, &method, params);
+}
+static void setBrowserDrawing(cef_browser_t *browser, HWND window, int drawing) {
+    int previous = (int)(ULONG_PTR)GetPropW(window, L"SimMusicDrawing"), next = drawing ? 2 : 1;
+    if (!browser || previous == next) return;
+    SetPropW(window, L"SimMusicDrawing", (HANDLE)(ULONG_PTR)next);
+    if (!previous && drawing) return;
+    cef_browser_host_t *host = browser->get_host(browser);
+    cef_dictionary_value_t *params = createDictionary();
+    cef_string_t enabled = cefString(L"enabled"), method = cefString(L"Emulation.setFocusEmulationEnabled");
+    params->set_bool(params, &enabled, drawing);
+    host->execute_dev_tools_method(host, 0, &method, params);
+    if (!drawing) { browserLifecycle(host, L"frozen"); browserLifecycle(host, L"active"); }
+    releaseCef(host);
 }
 static int isDraggable(LPARAM point) {
     POINT position = { GET_X_LPARAM(point), GET_Y_LPARAM(point) };
@@ -129,16 +156,18 @@ static void applyFrame(HWND window) {
     DwmExtendFrameIntoClientArea(window, &margins);
 }
 static void resizeBrowser(void) {
-    if (!browserWindow || IsIconic(mainWindow)) return;
+    if (!browserWindow) return;
     RECT client, child;
     GetClientRect(mainWindow, &client);
     GetWindowRect(browserWindow, &child);
     POINT origin = {child.left, child.top};
     ScreenToClient(mainWindow, &origin);
     int width = client.right-client.left, height = client.bottom-client.top;
-    if (width <= 0 || height <= 0) return;
-    if (origin.x == 0 && origin.y == 0 && child.right-child.left == width && child.bottom-child.top == height) return;
-    SetWindowPos(browserWindow, NULL, 0, 0, width, height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+    if (!IsIconic(mainWindow) && width > 0 && height > 0 &&
+        (origin.x != 0 || origin.y != 0 || child.right-child.left != width || child.bottom-child.top != height))
+        SetWindowPos(browserWindow, NULL, 0, 0, width, height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+    // Until pageReady, the initial document must draw once even while its frame is hidden.
+    setBrowserDrawing(mainBrowser, browserWindow, !IsIconic(mainWindow) && (!mainUnseen || !GetPropW(mainWindow, L"SimMusicContentReady")));
 }
 static void cancelSleepWindow(void) {
     if (!sleepBrowser) return;
@@ -295,8 +324,9 @@ static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPA
             ShowWindow(mainWindow, SW_SHOW);
             SetWindowPos(mainWindow, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW);
         }
+        resizeBrowser();
         return 0;
-    case WM_APP + 6: RemovePropW(mainWindow, L"SimMusicContentReady"); ShowWindow(mainWindow, SW_HIDE); return 0;
+    case WM_APP + 6: RemovePropW(mainWindow, L"SimMusicContentReady"); ShowWindow(mainWindow, SW_HIDE); resizeBrowser(); return 0;
     case WM_APP + 5:
         if (sleepWindow && !sleepClosing && !GetPropW(sleepWindow, L"SimMusicContentReady")) {
             SetPropW(sleepWindow, L"SimMusicContentReady", (HANDLE)1);
@@ -547,7 +577,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR commandLine, 
     if (result >= 0) return result;
     cef_settings_t settings = { .size = sizeof(settings), .no_sandbox = 1, .windowless_rendering_enabled = 1, .background_color = 0 };
     settings.root_cache_path = cefString(cache);
-    settings.cache_path = cefString(cache);
+    // The interface stores its state in Go. An empty cache_path gives it an in-memory
+    // context instead of reading the disk cache on every state poll. Extensions keep
+    // their own persistent contexts below root_cache_path for cookies/localStorage.
+    settings.user_data_path = cefString(cache);
     if (logPath) settings.log_file = cefString(logPath);
     settings.log_severity = LOGSEVERITY_WARNING;
     cef_string_t locale = cefString(L"zh-CN"); settings.locale = locale;

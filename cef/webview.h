@@ -6,6 +6,7 @@
 #include "include/capi/cef_keyboard_handler_capi.h"
 #include "include/capi/cef_render_process_handler_capi.h"
 #include "include/capi/cef_request_context_capi.h"
+#include "include/capi/cef_request_context_handler_capi.h"
 #include "include/capi/cef_cookie_capi.h"
 #include "include/capi/cef_v8_capi.h"
 #include "include/capi/cef_process_message_capi.h"
@@ -36,13 +37,12 @@ typedef struct Webview {
     int reported;           // the Go core has been told this view is closed
     int modalHeld;          // a dialog that has the main window disabled
     COLORREF background;    // what the container shows where its browser is not
-    int settled, stirred, asleep, waking;   // the play page at rest: see viewAwake
+    int settled, asleep, waking;   // the play page at rest: see viewAwake
     int unrevealed;         // a new panel or window kept out of sight until its page has drawn: see revealView
 } Webview;
 
 static __typeof__(&cef_browser_host_create_browser_sync) createBrowserSync;
 static __typeof__(&cef_request_context_create_context) createContext;
-static __typeof__(&cef_dictionary_value_create) createDictionary;
 static __typeof__(&cef_process_message_create) createProcessMessage;
 static __typeof__(&cef_v8value_create_function) createV8Function;
 static __typeof__(&cef_v8context_get_current_context) currentV8Context;
@@ -147,17 +147,14 @@ static BOOL CALLBACK subclassViewChild(HWND window, LPARAM data) {
 // window is on screen. A page hidden behind the host page, or in a window that is minimized, in the tray or
 // wholly covered by other windows, would otherwise go on animating at full rate. It is left alone until
 // its first page has been drawn once, so that it is laid out and has its pictures before it rests, and
-// stirred for a few seconds when the Go core has told it of another song or other lyrics: a page that
-// draws nothing does not finish what waits on drawing (a picture being decoded), and would be found
-// showing the previous song when it is opened.
-static int mainUnseen;
+// brought up to date by wakePanel before it slides in. A state update while hidden
+// must not wake its compositor for several seconds every time a song changes.
 static int viewAwake(Webview *view) {
-    if (view->kind != kindPanel || !(view->flags & viewCover) || !view->settled || view->stirred) return 1;
-    return (view->shown || view->sliding) && !mainUnseen;
+    if (view->kind != kindPanel || !(view->flags & viewCover) || !view->settled) return 1;
+    return (view->shown || view->sliding || view->waking) && !mainUnseen;
 }
-// The browser fills its container. One at rest is given no size instead: that is what hides a page as far
-// as Chromium is concerned (hiding the window does not). The page stops drawing, its animations and
-// requestAnimationFrame stop, document.visibilityState is "hidden"; it keeps the size it was laid out at.
+// Keep the document's actual layout size while at rest and propagate visibility to
+// Chromium itself, rather than relying on the native wrapper's size or visibility.
 static void resizeView(Webview *view) {
     if (!view->browser || !view->window) return;
     cef_browser_host_t *host = view->browser->get_host(view->browser);
@@ -167,7 +164,8 @@ static void resizeView(Webview *view) {
     GetClientRect(view->window, &client);
     if (!child || client.right <= 0 || client.bottom <= 0) return;
     view->asleep = !viewAwake(view);
-    SetWindowPos(child, NULL, 0, 0, view->asleep ? 0 : client.right, view->asleep ? 0 : client.bottom, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+    SetWindowPos(child, NULL, 0, 0, client.right, client.bottom, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+    if (view->kind == kindPanel && (view->flags & viewCover)) setBrowserDrawing(view->browser, child, !view->asleep);
 }
 static void applyViewFrame(Webview *view) {
     int borderless = IsZoomed(view->window) || view->fullscreen;
@@ -334,11 +332,9 @@ static void stepSlides(void) {
     if (!sliding) InterlockedExchange(&slideTicking, 0);
 }
 // Whether anything of the main window can be seen: it is shown, not minimized, on this virtual desktop, and
-// the windows above it leave some of it uncovered. A window that may be seen through (layered, drawn by
-// composition only, or of a shape of its own) is not taken to cover anything.
-#ifndef WS_EX_NOREDIRECTIONBITMAP
-#define WS_EX_NOREDIRECTIONBITMAP 0x00200000L
-#endif
+// the windows above it leave some of it uncovered. Transparent/layered or shaped
+// overlays aren't counted. NOREDIRECTIONBITMAP alone does not mean transparent:
+// ordinary Chromium/WinUI windows can draw an opaque DirectComposition surface.
 static int mainSeen(void) {
     BOOL cloaked = FALSE;
     if (!IsWindowVisible(mainWindow) || IsIconic(mainWindow)) return 0;
@@ -351,7 +347,7 @@ static int mainSeen(void) {
     int seen = 1;
     for (HWND above = GetWindow(mainWindow, GW_HWNDPREV); above && seen; above = GetWindow(above, GW_HWNDPREV)) {
         if (!IsWindowVisible(above) || IsIconic(above)) continue;
-        if (GetWindowLongPtrW(above, GWL_EXSTYLE) & (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOREDIRECTIONBITMAP)) continue;
+        if (GetWindowLongPtrW(above, GWL_EXSTYLE) & (WS_EX_LAYERED | WS_EX_TRANSPARENT)) continue;
         if (SUCCEEDED(DwmGetWindowAttribute(above, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) continue;
         if (GetWindowRgn(above, shape) != ERROR) continue;
         RECT cover;
@@ -370,6 +366,7 @@ static void checkSeen(void) {
     SetTimer(mainWindow, 1, unseen ? 100 : 1000, NULL);
     if (unseen == mainUnseen) return;
     mainUnseen = unseen;
+    resizeBrowser();
     for (Webview *view = webviews; view; view = view->next) if (view->kind == kindPanel && (view->flags & viewCover)) resizeView(view);
 }
 static void layoutPanels(void) {
@@ -407,7 +404,6 @@ static LRESULT CALLBACK viewProc(HWND window, UINT message, WPARAM wParam, LPARA
     case WM_TIMER:
         if (wParam == 1) { KillTimer(window, 1); wokePanel(view); }
         if (wParam == 2) { KillTimer(window, 2); view->settled = 1; resizeView(view); }
-        if (wParam == 3) { KillTimer(window, 3); view->stirred = 0; resizeView(view); }
         if (wParam == 4) revealView(view);
         return 0;
     case WM_NCHITTEST: {
@@ -786,6 +782,25 @@ static CookieCallback *cookieCallback(const char *request, int visitor) {
     return callback;
 }
 // Each extension has its own browser storage, kept under the given directory.
+// Keep cookies/localStorage, but do not read or write HTTP response bodies in that
+// storage. In particular, an offscreen extension's polling must not touch the disk
+// cache for every request. Honor an explicit cache-only request as requested.
+static cef_resource_request_handler_t uncachedResources;
+static cef_request_context_handler_t storageContext;
+static cef_return_value_t CEF_CALLBACK avoidHttpCache(cef_resource_request_handler_t *self,
+    cef_browser_t *browser, cef_frame_t *frame, cef_request_t *request, cef_callback_t *callback) {
+    int flags = request->get_flags(request);
+    // CEF 106 does not copy credentials_mode into GetFlags for browser requests.
+    // ALLOW_STORED_CREDENTIALS tells its setter to leave that original mode alone;
+    // without it, changing only the cache flag would strip cookies and break navigation.
+    if (!(flags & UR_FLAG_ONLY_FROM_CACHE)) request->set_flags(request, flags | UR_FLAG_DISABLE_CACHE | UR_FLAG_ALLOW_STORED_CREDENTIALS);
+    return RV_CONTINUE;
+}
+static cef_resource_request_handler_t *CEF_CALLBACK storageResources(cef_request_context_handler_t *self,
+    cef_browser_t *browser, cef_frame_t *frame, cef_request_t *request, int navigation, int download,
+    const cef_string_t *initiator, int *disableDefault) {
+    return &uncachedResources;
+}
 static cef_request_context_t *partition(const char *path) {
     wchar_t *directory = wide(path);
     int count = sizeof(partitions) / sizeof(*partitions);
@@ -794,7 +809,7 @@ static cef_request_context_t *partition(const char *path) {
         if (partitions[i].path) continue;
         cef_request_context_settings_t settings = { .size = sizeof(settings) };
         settings.cache_path = cefString(directory);
-        cef_request_context_t *context = createContext(&settings, NULL);
+        cef_request_context_t *context = createContext(&settings, &storageContext);
         if (!context) break;
         quietContext(context);
         partitions[i].path = directory;
@@ -1083,7 +1098,8 @@ static void hostCommand(char *line) {
         }
         layoutPanel(view);
     }
-    else if (!strcmp(command, "stir")) { if (view->window && (view->flags & viewCover)) { view->stirred = 1; SetTimer(view->window, 3, 5000, NULL); resizeView(view); } }
+    // Hidden pages receive state without drawing; wakePanel renders the latest state on show.
+    else if (!strcmp(command, "stir")) { }
     else if (!strcmp(command, "fullscreen") && count >= 3) { if (view->kind == kindPanel && (view->flags & viewCover)) setMainFullscreen(f[2][0] == '1'); }
     else if (!strcmp(command, "win") && count >= 5) windowCommand(view, f[2], f[3], f[4]);
 }
@@ -1189,6 +1205,10 @@ static void CEF_CALLBACK rendererContextCreated(cef_render_process_handler_t *se
 static cef_render_process_handler_t *CEF_CALLBACK getRenderer(cef_app_t *self) { return &rendererHandler; }
 
 static void initWebviews(void) {
+    initBase(&uncachedResources.base, sizeof(uncachedResources));
+    uncachedResources.on_before_resource_load = avoidHttpCache;
+    initBase(&storageContext.base, sizeof(storageContext));
+    storageContext.get_resource_request_handler = storageResources;
     initBase(&viewClient.base, sizeof(viewClient)); initBase(&viewLife.base, sizeof(viewLife));
     initBase(&viewLoad.base, sizeof(viewLoad)); initBase(&viewDisplay.base, sizeof(viewDisplay));
     initBase(&viewRequest.base, sizeof(viewRequest)); initBase(&viewDrag.base, sizeof(viewDrag));

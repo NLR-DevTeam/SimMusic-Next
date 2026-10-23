@@ -270,12 +270,14 @@ let wordProgress = "";
 const renderLyrics = () => {
     const signature = JSON.stringify(state.lyrics);
     if (signature !== lyricsSignature) {
+        const manual = lyricsView.classList.contains("manualScroll"), scrollTop = lyricsView.scrollTop;
         lyricsSignature = signature;
         shownLines = state.lyrics.perWord ? state.lyrics.perWord.map(line => ({ time: line.start, text: line.text, translation: line.translation, words: line.words })) : state.lyrics.traditional;
-        resetLyricsScroll();
+        if (!manual) resetLyricsScroll();
         lyricsView.innerHTML = shownLines.length ? shownLines.map((line, index) => `<div class="lyricLine" data-lyric="${index}">${line.words ? line.words.map(word => `<b class="lyricWord">${escapeText(word.text)}</b>`).join("") : escapeText(line.text)}${line.translation ? `<span>${escapeText(line.translation)}</span>` : ""}</div>`).join("") : `<div class="emptyLyrics">暂无歌词</div>`;
         const lines = shownLines;
-        lyricsView.querySelectorAll(".lyricLine").forEach((node, index) => node.onclick = async () => { await simPlayer.seek(lines[index].time + .1); updateLyrics(true); });
+        lyricsView.querySelectorAll(".lyricLine").forEach((node, index) => node.onclick = async () => { resetLyricsScroll(); await simPlayer.seek(lines[index].time + .1); updateLyrics(true); });
+        if (manual) lyricsView.scrollTop = scrollTop;
         activeLyric = -1;
         activeWords = [];
     }
@@ -284,7 +286,8 @@ const renderLyrics = () => {
 };
 const updateLyrics = (forceScroll = false, position = state.position) => {
     if (trackDisplayPending) return;
-    if (forceScroll) resetLyricsScroll();
+    // Re-layout and state refresh may force a recalculation, but must not end
+    // the user's three-second browsing interval.
     let index = -1;
     shownLines.forEach((line, i) => { if (line.time <= position) index = i; });
     if (index === activeLyric && !forceScroll) return;
@@ -328,7 +331,7 @@ lyricsView.addEventListener("wheel", event => {
     // Stop an in-flight follow animation before the browser applies the user's wheel delta.
     if (!lyricsView.classList.contains("manualScroll")) lyricsView.scrollTo({ top: lyricsView.scrollTop, behavior: "auto" });
     lyricsView.classList.add("manualScroll");
-    lyricsManualTimer = setTimeout(() => updateLyrics(true), 3000);
+    lyricsManualTimer = setTimeout(() => { resetLyricsScroll(); updateLyrics(true); }, 3000);
 }, { passive: true });
 addEventListener("resize", () => { if (state.visible) updateLyrics(true); });
 
@@ -383,9 +386,9 @@ const syncTrack = () => {
     if (lastCurrentKey === key) return;
     const nextSongKey = state.current ? trackKey(state.current) : "";
     const changed = displayedSongKey && nextSongKey && displayedSongKey !== nextSongKey;
+    if (displayedSongKey !== nextSongKey) resetLyricsScroll();
     displayedSongKey = nextSongKey;
     lastCurrentKey = key;
-    resetLyricsScroll();
     activeLyric = -1;
     updateTrackDisplay(state.current, changed);
 };
@@ -434,6 +437,7 @@ const syncView = () => {
     if (state.visible) setPlaySide(state.side === "queue", state.side === "lyrics");
     if (state.side !== "queue") lyricsShown = state.side === "lyrics";
     if (state.visible && !wasVisible) {
+        resetLyricsScroll();
         clearTimeout(openingTimer);
         document.body.classList.add("playerOpening");
         [largeCover, largeTitle.parentElement, lyricsView].forEach(element => element.classList.remove("trackChanging"));
@@ -486,3 +490,13 @@ document.addEventListener("pointerdown", event => { if (!event.target.closest(".
 addEventListener("blur", () => showVolume(false));
 // Esc 由宿主收起播放页；这里只收起自己的浮层。
 addEventListener("keydown", event => { if (event.key === "Escape") showVolume(false); }, true);
+
+// The initial state can arrive before this page has registered its listeners.
+simPlayer.ready.then(() => {
+    syncTrack();
+    syncQueue();
+    syncStatus();
+    renderLyrics();
+    syncPosition();
+    syncView();
+});

@@ -94,12 +94,14 @@ type App struct {
 	OnToast            func(msg string)
 	OnAlert            func(msg string)
 	OnPrompt           func(title, placeholder, value string) (string, error)
+	OnDialogForm       func(plugin.DialogForm) (map[string]string, error)
 	OnMusicInvalidated func(pluginID string)
 	OnConfirm          func(text string) (bool, error)
 	OnSidebarOpen      func(pluginID, id string)
 	OnQuit             func()
 	OnShowWindow       func()
 	OnSongMenu         func()
+	OnTrackMenu        func(list, selected []model.Track)
 	DialogOwner        func() uintptr
 
 	mu        sync.Mutex

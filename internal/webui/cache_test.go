@@ -25,6 +25,11 @@ func TestRuntimeCacheCleanupBoundary(t *testing.T) {
 	kept := filepath.Join(dir, "cef-cache", "webview", "ext", "Cookies")
 	os.MkdirAll(filepath.Dir(kept), 0o755)
 	os.WriteFile(kept, []byte("keep"), 0o644)
+	for _, name := range []string{"Cache", "Code Cache", "GPUCache", "DawnCache", "Local Storage", "IndexedDB"} {
+		path := filepath.Join(filepath.Dir(kept), name, "entry")
+		os.MkdirAll(filepath.Dir(path), 0o755)
+		os.WriteFile(path, []byte("data"), 0o644)
+	}
 	os.WriteFile(filepath.Join(dir, "cef-cache", "Cookies"), []byte("delete"), 0o644)
 	if err := clearRuntimeCache(dir, "cef-cache"); err != nil {
 		t.Fatal(err)
@@ -34,6 +39,16 @@ func TestRuntimeCacheCleanupBoundary(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(kept); string(b) != "keep" {
 		t.Fatal("webview storage was deleted")
+	}
+	for _, name := range []string{"Cache", "Code Cache", "GPUCache", "DawnCache"} {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(kept), name)); !os.IsNotExist(err) {
+			t.Fatalf("webview cache remains: %s", name)
+		}
+	}
+	for _, name := range []string{"Local Storage", "IndexedDB"} {
+		if b, _ := os.ReadFile(filepath.Join(filepath.Dir(kept), name, "entry")); string(b) != "data" {
+			t.Fatalf("webview storage was deleted: %s", name)
+		}
 	}
 	if err := clearRuntimeCache(dir, ".."); err == nil {
 		t.Fatal("unchecked path accepted")

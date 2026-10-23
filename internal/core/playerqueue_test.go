@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"simmusic/internal/model"
 	"simmusic/internal/plugin"
@@ -72,8 +73,16 @@ func TestPlayerQueueAndPlayback(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := a.Snapshot()
-	if len(s.Queue) != 2 || s.Queue[0].Source != "sync" || s.Queue[0].Title != "Shared x" || s.Current.ID != "1" {
+	if len(s.Queue) != 2 || s.Queue[0].Source != "sync" || s.Queue[0].InfoReady || s.Current.ID != "1" {
 		t.Fatalf("queue: %+v", s.Queue)
+	}
+	a.PlayerLoadInfo([]int{0})
+	until := time.Now().Add(time.Second)
+	for !a.Snapshot().Queue[0].InfoReady && time.Now().Before(until) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if a.Snapshot().Queue[0].Title != "Shared x" {
+		t.Fatal("visible queue metadata was not loaded")
 	}
 	if err := a.PlayerQueue(sync, "append", []model.Track{{ID: "y"}}, plugin.QueueOptions{Index: -1}); err != nil || len(a.Snapshot().Queue) != 3 {
 		t.Fatal("append", err)
@@ -90,5 +99,20 @@ func TestPlayerQueueAndPlayback(t *testing.T) {
 	}
 	if _, err := a.PlayerPlayback("alpha", "9"); err == nil || !strings.Contains(err.Error(), "队列") {
 		t.Fatal("a song outside the queue was handed over", err)
+	}
+}
+
+func TestPlayerQueueDoesNotFetchTheWholeListBeforeSwitching(t *testing.T) {
+	a, p := musicFixture(t, `let calls=0; exports.calls=()=>calls; exports.getMusicInfo=()=>{calls++;throw new Error("metadata must be lazy")};`, nil)
+	a.mu.Lock()
+	a.queue, a.index, a.shuffle = []model.Track{{Source: "test", ID: "current", Title: "Current"}}, 0, []int{0}
+	a.mu.Unlock()
+	refs := []model.Track{{Source: "test", ID: "next"}, {Source: "test", ID: "current"}}
+	if err := a.PlayerQueue(p, "set", refs, plugin.QueueOptions{Index: -1}); err != nil {
+		t.Fatal(err)
+	}
+	var calls int
+	if err := p.CallInto(time.Second, &calls, "calls"); err != nil || calls != 0 {
+		t.Fatalf("queue blocked on list metadata: %d %v", calls, err)
 	}
 }

@@ -737,7 +737,7 @@ const playlistActions = tracks => [
     { label: "新建歌单", icon: "EA13", action: async () => { const id = await createPlaylist(); if (id) { await run("addPlaylist", { id, tracks }); await refreshCatalog(); } } }
 ];
 let trackContextGeneration = 0;
-const showTrackContext = async (tracks, scene = "list") => {
+const showTrackContext = async (tracks, scene = "list", context = null) => {
     if (!tracks.length) return;
     const generation = ++trackContextGeneration;
     // Entries that would change nothing are left out: the playing song is not offered "play",
@@ -746,7 +746,9 @@ const showTrackContext = async (tracks, scene = "list") => {
     const only = tracks.length === 1 ? queued.get(trackKey(tracks[0])) : undefined;
     const isCurrent = only !== undefined && only === player.Index;
     const items = [];
-    if (!isCurrent) items.push({ label: "播放", icon: "F00B", action: () => scene === "queue" && only !== undefined ? run("playIndex", { index: only }) : run("play", { tracks, index: 0 }) });
+    const playList = tracks.length === 1 && context?.list?.length ? context.list : tracks;
+    const playAt = Math.max(0, playList.findIndex(track => trackKey(track) === trackKey(tracks[0])));
+    if (!isCurrent) items.push({ label: "播放", icon: "F00B", action: () => scene === "queue" && only !== undefined ? run("playIndex", { index: only }) : run("play", { tracks: playList, index: playAt }) });
     if (!isCurrent && !(only !== undefined && player.Index >= 0 && only === player.Index + 1)) items.push({ label: "下一首播放", action: () => run("playNext", { tracks }) });
     if (!tracks.every(track => queued.has(trackKey(track)))) items.push({ label: "添加到播放队列", icon: "F00F", action: () => run("appendQueue", { tracks }) });
     items.push({ label: "添加到歌单", icon: icons.playlist, children: () => playlistActions(tracks) });
@@ -761,7 +763,7 @@ const showTrackContext = async (tracks, scene = "list") => {
         { label: "停止播放", icon: "F1A1", action: () => run("stop") },
         { label: "播放页样式", icon: "F2C4", action: () => showPlayPages() }
     );
-    if (scene === "list" && page.kind === "playlist") items.push({ label: "从歌单移除", icon: "EC2A", action: async () => { await run("removePlaylist", { id: page.id, tracks }); await refreshCatalog(); } });
+    if (scene === "list" && !context?.external && page.kind === "playlist") items.push({ label: "从歌单移除", icon: "EC2A", action: async () => { await run("removePlaylist", { id: page.id, tracks }); await refreshCatalog(); } });
     const pluginItems = actions => (actions || []).map(action => ({ label: action.label, icon: action.icon, children: action.dynamic ? async () => pluginItems(await api("trackActions", { tracks, scene, parent: action.key })) : action.children?.length ? pluginItems(action.children) : null, action: () => run("trackAction", { tracks, scene, key: action.key }) }));
     const actions = await run("trackActions", { tracks, scene });
     if (generation !== trackContextGeneration) return;
@@ -1562,6 +1564,7 @@ const applyPlayTitle = () => {
 };
 // What only this page can do for the play page: closing it, the song menus, the player's dialogs, the keys.
 const handlePlayRequest = request => {
+    if (request.kind === "trackMenu") { showTrackContext(request.selected || [], "list", { list: request.list || [], external: true }); return; }
     if (request.kind === "menu") { handleMenuEvent(request); return; }
     if (request.kind === "lyricsShown") { lyricsShown = !!request.value; return; }
     // The song menu asked for from outside the window (sim.player.showMenu): the play page need not be open.
@@ -1674,6 +1677,9 @@ const updatePlayer = snapshot => {
             // An extension asks to install a package: the installer shows it and answers with the permissions switched off.
             const denied = await showInstaller(JSON.parse(prompt.value), false);
             text = denied ? JSON.stringify(denied) : "";
+        } else if (prompt.kind === "form") {
+            const answer = await su5.dialog.prompt({ ...prompt.form, buttonHtml: escapeText(prompt.form.submit || "确定") });
+            text = answer ? JSON.stringify(answer) : "";
         } else text = prompt.kind === "confirm" ? await su5.dialog.confirm(prompt.title) ? "1" : "" : (await su5.dialog.prompt({ title: prompt.title, items: [{ type: "input", name: "value", placeholder: prompt.placeholder, value: prompt.value }] }))?.value || "";
         await run("promptResult", { id: prompt.id, text });
         shownPrompts.delete(prompt.id);

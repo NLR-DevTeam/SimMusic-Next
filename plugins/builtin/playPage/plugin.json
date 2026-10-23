@@ -1,7 +1,7 @@
 {
   "id": "playPage",
   "name": "默认播放页",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "SimMusic",
   "description": "SimMusic 内置基础播放页组件。",
   "main": "main.js",
