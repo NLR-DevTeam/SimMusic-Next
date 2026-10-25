@@ -1370,11 +1370,37 @@ static void menuDeactivate(GtkMenuShell *shell, gpointer data) { g_idle_add(menu
 static gboolean popupMenu(gpointer data) {
     if (!menuTop) { menuWait = 0; return G_SOURCE_REMOVE; }
     GdkSeat *seat = gdk_display_get_default_seat(gdk_display_get_default());
+    GdkDevice *pointer = seat ? gdk_seat_get_pointer(seat) : NULL;
     GdkModifierType buttons = 0;
-    gdk_device_get_state(gdk_seat_get_pointer(seat), gdk_get_default_root_window(), NULL, &buttons);
+    if (!pointer) { menuWait = 0; return G_SOURCE_REMOVE; }
+    GdkWindow *root = gdk_get_default_root_window();
+    gdk_device_get_state(pointer, root, NULL, &buttons);
     if (buttons & (GDK_BUTTON1_MASK | GDK_BUTTON2_MASK | GDK_BUTTON3_MASK)) return G_SOURCE_CONTINUE;
     menuWait = 0;
-    gtk_menu_popup_at_pointer(GTK_MENU(menuTop), NULL);
+    // The press that opened this menu happened in a browser window, not in a GTK widget, so there is
+    // no current GTK event for gtk_menu_popup_at_pointer() to take the pointer and its window from.
+    // Give the menu the pointer and the main window explicitly, with a release event so that it takes
+    // the pointer grab (a menu opened without one closes again at once).
+    GdkWindow *anchor = mainWindow && gtk_widget_get_visible(mainWindow) ? gtk_widget_get_window(mainWindow) : NULL;
+    if (!anchor) anchor = root;
+    gint rootX = 0, rootY = 0;
+    gdk_device_get_position(pointer, NULL, &rootX, &rootY);
+    gint x = rootX, y = rootY;
+    if (anchor != root) {
+        gint originX = 0, originY = 0;
+        gdk_window_get_origin(anchor, &originX, &originY);
+        x -= originX; y -= originY;
+    }
+    GdkRectangle rect = { x, y, 1, 1 };
+    GdkEvent *trigger = gdk_event_new(GDK_BUTTON_RELEASE);
+    trigger->button.window = g_object_ref(anchor);
+    trigger->button.device = g_object_ref(pointer);
+    trigger->button.x = x; trigger->button.y = y;
+    trigger->button.x_root = rootX; trigger->button.y_root = rootY;
+    trigger->button.button = GDK_BUTTON_PRIMARY;
+    trigger->button.time = GDK_CURRENT_TIME;
+    gtk_menu_popup_at_rect(GTK_MENU(menuTop), anchor, &rect, GDK_GRAVITY_SOUTH_EAST, GDK_GRAVITY_NORTH_WEST, trigger);
+    gdk_event_free(trigger);
     return G_SOURCE_REMOVE;
 }
 static void addMenuRows(char **f, int count) {
