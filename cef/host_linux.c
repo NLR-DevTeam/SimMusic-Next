@@ -33,6 +33,7 @@
 #include "include/capi/cef_display_handler_capi.h"
 #include "include/capi/cef_request_handler_capi.h"
 #include "include/capi/cef_render_handler_capi.h"
+#include "include/capi/views/cef_display_capi.h"
 #include "include/capi/cef_load_handler_capi.h"
 #include "include/capi/cef_keyboard_handler_capi.h"
 #include "include/capi/cef_render_process_handler_capi.h"
@@ -199,6 +200,9 @@ static double unitScale(void) {
     double dpi = gdk_screen_get_resolution(gdk_screen_get_default());
     return dpi > 0 ? fmax(1, dpi / 96) : 1;
 }
+// CEF's window bounds are in device-independent pixels, while the X windows here are in device pixels.
+static float browserScale = 1;
+static int dip(int devicePixels) { return (int)lround(devicePixels / browserScale); }
 static int deviceScale(GtkWidget *window) { return window ? gtk_widget_get_scale_factor(window) : 1; }
 static int units(double css) { return (int)lround(css * unitScale()); }
 static int pixels(GtkWidget *window, double css) { return (int)lround(css * unitScale() * deviceScale(window)); }
@@ -250,7 +254,16 @@ static void setShape(Window window, int kind, cairo_region_t *region) {
 // The X window a browser is created in. It is ours, so its shapes are ours to set; the browser's own
 // window fills it.
 static Window makeBox(Window parent, int width, int height, unsigned long background) {
-    Window box = XCreateSimpleWindow(xd, parent, 0, 0, width > 0 ? width : 1, height > 0 ? height : 1, 0, 0, background);
+    // CEF creates its browser window with the screen's default visual. The box the browser fills is
+    // made with that visual too, so the browser window and its parent agree.
+    XWindowAttributes parentAttrs;
+    if (!XGetWindowAttributes(xd, parent, &parentAttrs)) return 0;
+    Screen *screen = parentAttrs.screen;
+    XSetWindowAttributes attrs = { .background_pixel = background, .border_pixel = 0,
+        .colormap = DefaultColormapOfScreen(screen) };
+    Window box = XCreateWindow(xd, parent, 0, 0, width > 0 ? width : 1, height > 0 ? height : 1, 0,
+        DefaultDepthOfScreen(screen), InputOutput, DefaultVisualOfScreen(screen),
+        CWBackPixel | CWBorderPixel | CWColormap, &attrs);
     XFlush(xd);
     return box;
 }
@@ -458,7 +471,7 @@ static void createMainWindow(void) {
     mainBox = makeBox(GDK_WINDOW_XID(gtk_widget_get_window(mainWindow)), width, height, 0);
     XMapWindow(xd, mainBox);
     cef_window_info_t info = { .parent_window = mainBox };
-    info.bounds.width = width; info.bounds.height = height;
+    info.bounds.width = dip(width); info.bounds.height = dip(height);
     cef_browser_settings_t settings = { .size = sizeof(settings), .background_color = 0xfff9f9fb };
     cef_string_t url = make(startUrl);
     if (!cef_browser_host_create_browser(&info, &client, &url, &settings, NULL, NULL)) { gtk_widget_destroy(mainWindow); mainWindow = NULL; cef_quit_message_loop(); }
@@ -479,6 +492,7 @@ static void showSleepWindow(void) {
     gtk_window_set_keep_above(GTK_WINDOW(sleepWindow), TRUE);
     gtk_window_set_skip_taskbar_hint(GTK_WINDOW(sleepWindow), TRUE);
     GdkRectangle screen = {0};
+    GdkWindow *of = mainWindow && gtk_widget_get_visible(mainWindow) ? gtk_widget_get_window(mainWindow) : NULL;
     GdkMonitor *monitor = of ? gdk_display_get_monitor_at_window(gdk_display_get_default(), of) : gdk_display_get_primary_monitor(gdk_display_get_default());
     if (monitor) gdk_monitor_get_geometry(monitor, &screen);
     gtk_window_move(GTK_WINDOW(sleepWindow), screen.x, screen.y);
@@ -489,7 +503,7 @@ static void showSleepWindow(void) {
     sleepBox = makeBox(GDK_WINDOW_XID(gtk_widget_get_window(sleepWindow)), width, height, 0);
     XMapWindow(xd, sleepBox);
     cef_window_info_t info = { .parent_window = sleepBox };
-    info.bounds.width = width; info.bounds.height = height;
+    info.bounds.width = dip(width); info.bounds.height = dip(height);
     cef_browser_settings_t settings = { .size = sizeof(settings), .background_color = 0xff000000 };
     char *address = g_strdup_printf("%ssleep.html", startUrl);
     cef_string_t url = make(address);
@@ -767,7 +781,7 @@ static int openDialogPopup(const cef_string_t *name, const cef_popup_features_t 
     XMapWindow(xd, view->box);
     info->parent_window = view->box;
     info->bounds.x = info->bounds.y = 0;
-    info->bounds.width = width; info->bounds.height = height;
+    info->bounds.width = dip(width); info->bounds.height = dip(height);
     settings->background_color = 0xfff9f9fb;
     *newClient = &viewClient;
     view->next = webviews;
@@ -1190,7 +1204,7 @@ static void createView(char **f, int count) {
         view->box = makeBox(GDK_WINDOW_XID(gtk_widget_get_window(view->window)), boxWidth, boxHeight, color);
         XMapWindow(xd, view->box);
         info.parent_window = view->box;
-        info.bounds.width = boxWidth; info.bounds.height = boxHeight;
+        info.bounds.width = dip(boxWidth); info.bounds.height = dip(boxHeight);
     } else {
         info.windowless_rendering_enabled = 1;
         info.parent_window = mainBox;
@@ -2021,12 +2035,13 @@ int main(int argc, char **argv) {
     char *cache = NULL, *logPath = NULL;
     int subprocess = 0;
     for (int i = 1; i < argc; i++) {
+        // CEF rewrites argv while it starts, so the values are copied out of it before that.
         if (!strncmp(argv[i], "--type=", 7)) subprocess = 1;
-        if (!strncmp(argv[i], "--simmusic-url=", 15)) startUrl = argv[i] + 15;
-        if (!strncmp(argv[i], "--simmusic-cache=", 17)) cache = argv[i] + 17;
-        if (!strncmp(argv[i], "--simmusic-log=", 15)) logPath = argv[i] + 15;
-        if (!strncmp(argv[i], "--simmusic-icon=", 16)) iconPath = argv[i] + 16;
-        if (!strncmp(argv[i], "--simmusic-icon-font=", 21)) iconFont = argv[i] + 21;
+        if (!strncmp(argv[i], "--simmusic-url=", 15)) startUrl = g_strdup(argv[i] + 15);
+        if (!strncmp(argv[i], "--simmusic-cache=", 17)) cache = g_strdup(argv[i] + 17);
+        if (!strncmp(argv[i], "--simmusic-log=", 15)) logPath = g_strdup(argv[i] + 15);
+        if (!strncmp(argv[i], "--simmusic-icon=", 16)) iconPath = g_strdup(argv[i] + 16);
+        if (!strncmp(argv[i], "--simmusic-icon-font=", 21)) iconFont = g_strdup(argv[i] + 21);
     }
     if (!subprocess && (!startUrl || !cache || !launchedByMain())) return 0;
     if (strcmp(cef_api_hash(0), CEF_API_HASH_PLATFORM)) { fprintf(stderr, "CEF API hash mismatch\n"); return 3; }
@@ -2046,6 +2061,12 @@ int main(int argc, char **argv) {
     gdk_set_allowed_backends("x11");
     gdk_set_program_class("SimMusic.Next");
     gtk_init(NULL, NULL);
+    cef_display_t *display = cef_display_get_primary();
+    if (display) {
+        float scale = display->get_device_scale_factor(display);
+        if (scale > 0) browserScale = scale;
+        releaseCef(display);
+    }
     xd = GDK_DISPLAY_XDISPLAY(gdk_display_get_default());
     XSetErrorHandler(xError);
     XSetIOErrorHandler(xIoError);
@@ -2055,6 +2076,8 @@ int main(int argc, char **argv) {
     createMainWindow();
     GIOChannel *input = g_io_channel_unix_new(STDIN_FILENO);
     g_io_channel_set_encoding(input, NULL, NULL);
+    // Without this a read_line after the last complete command would wait for more input and freeze the loop.
+    g_io_channel_set_flags(input, G_IO_FLAG_NONBLOCK, NULL);
     g_io_add_watch(input, G_IO_IN | G_IO_HUP | G_IO_ERR, readCommands, NULL);
     cef_run_message_loop();
     releasePartitions();
