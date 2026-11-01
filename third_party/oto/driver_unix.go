@@ -60,11 +60,20 @@ func deviceCandidates() []string {
 	var hints *unsafe.Pointer
 	err := C.snd_device_name_hint(getAllDevices, cPCMInterfaceName, &hints)
 	if err != 0 {
-		return []string{"default", "plug:default"}
+		return []string{"pulse", "pipewire", "default", "plug:default"}
 	}
 	defer C.snd_device_name_free_hint(hints)
 
-	var devices []string
+	// Prefer the sound-server ALSA plugins. On a PipeWire/PulseAudio system,
+	// opening "default" or the raw hardware directly can race the sound server
+	// for the same PCM and leave playback stuck in repeated EPIPE errors.
+	devices := []string{"pulse", "pipewire", "default", "plug:default"}
+	seen := map[string]bool{
+		"pulse":        true,
+		"pipewire":     true,
+		"default":      true,
+		"plug:default": true,
+	}
 
 	cIoHintName := C.CString("IOID")
 	defer C.free(unsafe.Pointer(cIoHintName))
@@ -92,16 +101,12 @@ func deviceCandidates() []string {
 			continue
 		}
 		goName := C.GoString(name)
-		if goName == "null" {
+		if goName == "null" || seen[goName] {
 			continue
 		}
-		if goName == "default" {
-			continue
-		}
+		seen[goName] = true
 		devices = append(devices, goName)
 	}
-
-	devices = append([]string{"default", "plug:default"}, devices...)
 
 	return devices
 }
@@ -110,67 +115,71 @@ func newContext(sampleRate int, channelCount int, format mux.Format, bufferSizeI
 	c := &context{
 		channelCount: channelCount,
 		cond:         sync.NewCond(&sync.Mutex{}),
-		mux:          mux.New(sampleRate, channelCount, format),
 		ready:        make(chan struct{}),
 	}
 	theContext = c
 
+	// Open a default ALSA audio device for blocking stream playback. Do this
+	// synchronously so NewContext can report a failure: oto's ready channel only
+	// signals that the attempt finished, and callers such as beep's speaker.Init
+	// do not check Context.Err() afterwards.
+	type openError struct {
+		device string
+		err    C.int
+	}
+	var openErrs []openError
+	var found bool
+
+	for _, name := range deviceCandidates() {
+		cname := C.CString(name)
+		err := C.snd_pcm_open(&c.handle, cname, C.SND_PCM_STREAM_PLAYBACK, 0)
+		C.free(unsafe.Pointer(cname))
+		if err < 0 {
+			openErrs = append(openErrs, openError{
+				device: name,
+				err:    err,
+			})
+			continue
+		}
+		found = true
+		break
+	}
+	if !found {
+		var msgs []string
+		for _, e := range openErrs {
+			msgs = append(msgs, fmt.Sprintf("%q: %s", e.device, C.GoString(C.snd_strerror(e.err))))
+		}
+		err := fmt.Errorf("oto: ALSA error at snd_pcm_open: %s", strings.Join(msgs, ", "))
+		c.err.TryStore(err)
+		return nil, nil, err
+	}
+
+	// TODO: Should snd_pcm_hw_params_set_periods be called explicitly?
+	const periods = 2
+	var periodSize C.snd_pcm_uframes_t
+	if bufferSizeInBytes != 0 {
+		periodSize = C.snd_pcm_uframes_t(bufferSizeInBytes / (channelCount * 4 * periods))
+	} else {
+		periodSize = C.snd_pcm_uframes_t(1024)
+	}
+	bufferSize := periodSize * periods
+	if err := c.alsaPcmHwParams(sampleRate, channelCount, &bufferSize, &periodSize); err != nil {
+		C.snd_pcm_close(c.handle)
+		c.handle = nil
+		c.err.TryStore(err)
+		return nil, nil, err
+	}
+
+	c.mux = mux.New(sampleRate, channelCount, format)
 	go func() {
-		defer close(c.ready)
-
-		// Open a default ALSA audio device for blocking stream playback
-		type openError struct {
-			device string
-			err    C.int
-		}
-		var openErrs []openError
-		var found bool
-
-		for _, name := range deviceCandidates() {
-			cname := C.CString(name)
-			defer C.free(unsafe.Pointer(cname))
-			if err := C.snd_pcm_open(&c.handle, cname, C.SND_PCM_STREAM_PLAYBACK, 0); err < 0 {
-				openErrs = append(openErrs, openError{
-					device: name,
-					err:    err,
-				})
-				continue
+		buf32 := make([]float32, int(periodSize)*channelCount)
+		for {
+			if !c.readAndWrite(buf32) {
+				return
 			}
-			found = true
-			break
 		}
-		if !found {
-			var msgs []string
-			for _, e := range openErrs {
-				msgs = append(msgs, fmt.Sprintf("%q: %s", e.device, C.GoString(C.snd_strerror(e.err))))
-			}
-			c.err.TryStore(fmt.Errorf("oto: ALSA error at snd_pcm_open: %s", strings.Join(msgs, ", ")))
-			return
-		}
-
-		// TODO: Should snd_pcm_hw_params_set_periods be called explicitly?
-		const periods = 2
-		var periodSize C.snd_pcm_uframes_t
-		if bufferSizeInBytes != 0 {
-			periodSize = C.snd_pcm_uframes_t(bufferSizeInBytes / (channelCount * 4 * periods))
-		} else {
-			periodSize = C.snd_pcm_uframes_t(1024)
-		}
-		bufferSize := periodSize * periods
-		if err := c.alsaPcmHwParams(sampleRate, channelCount, &bufferSize, &periodSize); err != nil {
-			c.err.TryStore(err)
-			return
-		}
-
-		go func() {
-			buf32 := make([]float32, int(periodSize)*channelCount)
-			for {
-				if !c.readAndWrite(buf32) {
-					return
-				}
-			}
-		}()
 	}()
+	close(c.ready)
 
 	return c, c.ready, nil
 }

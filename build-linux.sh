@@ -12,7 +12,7 @@ distribution="cef_binary_${version}_linux64_minimal"
 out="build/linux"
 runtime="$out/runtime"
 
-for tool in go gcc pkg-config curl tar; do
+for tool in go gcc pkg-config curl tar strip; do
     command -v "$tool" >/dev/null || { echo "$tool is required on PATH" >&2; exit 1; }
 done
 pkg-config --exists gtk+-3.0 x11 xext fontconfig alsa || { echo "Install the development packages of GTK 3, X11, Xext, fontconfig and ALSA" >&2; exit 1; }
@@ -26,6 +26,9 @@ if [ ! -f "$cef/include/cef_api_hash.h" ]; then
     [ -f "$archive" ] || curl --fail --location --output "$archive" "https://cef-builds.spotifycdn.com/$(printf %s "$distribution.tar.bz2" | sed 's/+/%2B/g')"
     tar -xjf "$archive" -C cef
 fi
+
+# CEF ships unstripped shared libraries; strip them before linking and copying.
+strip --strip-unneeded "$cef/Release/"*.so*
 
 mkdir -p "$runtime"
 # shellcheck disable=SC2046
