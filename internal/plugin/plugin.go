@@ -20,7 +20,11 @@ import (
 
 	"simmusic/internal/config"
 	"simmusic/internal/model"
+	"simmusic/internal/wake"
 )
+
+// A job that holds an extension's thread this long while a call has run out of time is stuck, not busy.
+var stuckAfter = 10 * time.Second
 
 // Manifest 对应插件目录下的 plugin.json。
 type Manifest struct {
@@ -72,6 +76,9 @@ type runState struct {
 	names   map[string]bool // 导出的函数名
 	// 本次运行启动的本机程序（sim.shell.spawn / exec）；停止时一并结束
 	children *children
+
+	jobMu     sync.Mutex
+	busySince time.Time // 事件循环上当前任务的开始时间；空闲时为零值
 }
 
 func (p *Plugin) state() *runState {
@@ -150,12 +157,42 @@ func (p *Plugin) loop(rs *runState) {
 						p.logf("panic: %v", r)
 					}
 				}()
+				rs.setBusy(true)
+				defer rs.setBusy(false)
 				f()
 			}()
 		case <-rs.quit:
 			return
 		}
 	}
+}
+
+func (rs *runState) setBusy(busy bool) {
+	rs.jobMu.Lock()
+	defer rs.jobMu.Unlock()
+	rs.busySince = time.Time{}
+	if busy {
+		rs.busySince = time.Now()
+	} else if rs.runtime != nil {
+		rs.runtime.ClearInterrupt()
+	}
+}
+
+// timedOut gives up on one call and on nothing else: an extension waiting on a slow server is in no trouble
+// and stays loaded. Only a job that keeps the extension's thread from all its other work is broken off, which
+// costs that job alone. An interrupt is only ever sent to a job in progress and cleared as it ends.
+func (p *Plugin) timedOut(rs *runState, name string) error {
+	p.logf("%s() 超时", name)
+	p.mu.Lock()
+	rt := rs.runtime
+	p.mu.Unlock()
+	rs.jobMu.Lock()
+	if rt != nil && !rs.busySince.IsZero() && time.Since(rs.busySince) >= stuckAfter {
+		p.logf("中断占用事件循环的任务")
+		rt.Interrupt(errors.New("job stuck"))
+	}
+	rs.jobMu.Unlock()
+	return fmt.Errorf("plugin %s: %s timeout", p.Manifest.ID, name)
 }
 
 // start 创建运行时并执行入口脚本。
@@ -216,13 +253,15 @@ func (p *Plugin) start() error {
 		p.mu.Unlock()
 		errCh <- nil
 	})
+	expired, stopWait := wake.After(10 * time.Second)
+	defer stopWait()
 	select {
 	case err := <-errCh:
 		if err != nil {
 			p.stop()
 			return err
 		}
-	case <-time.After(10 * time.Second):
+	case <-expired:
 		p.stop()
 		return errors.New("plugin load timeout")
 	}
@@ -308,7 +347,9 @@ func (p *Plugin) call(timeout time.Duration, name string, args ...any) (any, err
 		}
 		ch <- result{exportJSON(v), nil}
 	}
-	ok := p.postState(rs, func() {
+	expired, stopWait := wake.After(timeout)
+	defer stopWait()
+	job := func() {
 		fn, ok := goja.AssertFunction(p.exports.Get(name))
 		if !ok {
 			ch <- result{nil, ErrNotImplemented}
@@ -339,9 +380,13 @@ func (p *Plugin) call(timeout time.Duration, name string, args ...any) (any, err
 				p.rt.ToValue(func(v goja.Value) { done(v, nil) }),
 				p.rt.ToValue(func(v goja.Value) { done(nil, jsError(v)) }))
 		}
-	})
-	if !ok {
+	}
+	select {
+	case rs.jobs <- job:
+	case <-rs.quit:
 		return nil, errors.New("plugin stopped")
+	case <-expired:
+		return nil, p.timedOut(rs, name)
 	}
 	select {
 	case r := <-ch:
@@ -351,12 +396,8 @@ func (p *Plugin) call(timeout time.Duration, name string, args ...any) (any, err
 		return r.v, r.err
 	case <-rs.quit:
 		return nil, errors.New("plugin stopped")
-	case <-time.After(timeout):
-		p.logf("%s() 超时", name)
-		err := fmt.Errorf("plugin %s: %s timeout", p.Manifest.ID, name)
-		p.stop()
-		p.setErr(err)
-		return nil, err
+	case <-expired:
+		return nil, p.timedOut(rs, name)
 	}
 }
 

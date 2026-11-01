@@ -28,11 +28,11 @@ func (f *fakePlayer) Alert(string)                                 {}
 func (f *fakePlayer) RefreshMenus()                                {}
 func (f *fakePlayer) PickFolder(string) (string, error)            { return "", nil }
 func (f *fakePlayer) PickFiles(string, []string) ([]string, error) { return nil, nil }
-func (f *fakePlayer) PlayerState() map[string]any {
+func (f *fakePlayer) PlayerState(known uint32) map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return map[string]any{"playing": !f.paused, "loading": false, "position": 3.5, "duration": 60.0, "speed": 1.0, "volume": f.volume,
-		"current": map[string]any{"id": "1"}, "index": 0, "queue": []any{map[string]any{"id": "1"}}}
+		"current": map[string]any{"id": "1"}, "index": 0, "queue": []any{map[string]any{"id": "1"}}, "queueStamp": uint32(1)}
 }
 func (f *fakePlayer) PlayerCover(source, id string, large bool) []byte {
 	if id == "none" {

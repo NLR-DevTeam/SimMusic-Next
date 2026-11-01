@@ -125,8 +125,8 @@ func (a *App) ClearPluginFields(id string, fields, ids []string) {
 		}
 		// Requests in flight were made before the change and must not be stored.
 		x.epochs[key]++
-		x.store.Set(key, e)
 	}
+	x.save()
 	x.mu.Unlock()
 	if list && a.OnMusicInvalidated != nil {
 		a.OnMusicInvalidated(id)

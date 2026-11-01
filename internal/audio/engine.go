@@ -407,17 +407,20 @@ func (b *brs) Seek(off int64, whence int) (int64, error) {
 
 // ---------- 渐进式 HTTP 读取 ----------
 
-// HTTPReader 在后台下载整个文件，读取时只在数据尚未到达时阻塞。
+// HTTPReader 在后台把整个文件下载到临时文件（无损歌曲动辄上百 MB，不留在内存里），
+// 读取时只在数据尚未到达时阻塞。
 type HTTPReader struct {
-	mu     sync.Mutex
-	cond   *sync.Cond
-	buf    []byte
-	total  int64
-	done   bool
-	err    error
-	pos    int64
-	closed bool
-	resp   *http.Response
+	mu      sync.Mutex
+	cond    *sync.Cond
+	file    *os.File
+	written int64
+	total   int64
+	done    bool
+	err     error
+	pos     int64
+	closed  bool
+	pumped  bool // 下载协程已结束；它和 Close 之中后结束的一方关闭文件
+	resp    *http.Response
 }
 
 func OpenHTTP(url string, headers map[string]string) (*HTTPReader, error) {
@@ -437,11 +440,13 @@ func OpenHTTP(url string, headers map[string]string) (*HTTPReader, error) {
 		resp.Body.Close()
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	h := &HTTPReader{total: resp.ContentLength, resp: resp}
-	h.cond = sync.NewCond(&h.mu)
-	if h.total > 0 {
-		h.buf = make([]byte, 0, h.total)
+	file, err := spoolFile()
+	if err != nil {
+		resp.Body.Close()
+		return nil, err
 	}
+	h := &HTTPReader{total: resp.ContentLength, resp: resp, file: file}
+	h.cond = sync.NewCond(&h.mu)
 	go h.pump()
 	return h, nil
 }
@@ -450,17 +455,24 @@ func (h *HTTPReader) pump() {
 	chunk := make([]byte, 64<<10)
 	for {
 		n, err := h.resp.Body.Read(chunk)
+		if _, writeErr := h.file.WriteAt(chunk[:n], h.written); writeErr != nil && err == nil {
+			err = writeErr
+		}
 		h.mu.Lock()
-		h.buf = append(h.buf, chunk[:n]...)
+		h.written += int64(n)
 		if err != nil || h.closed {
-			h.done = true
+			h.done, h.pumped = true, true
 			if err != io.EOF {
 				h.err = err
 			}
-			h.total = int64(len(h.buf))
+			h.total = h.written
+			closed := h.closed
 			h.cond.Broadcast()
 			h.mu.Unlock()
 			h.resp.Body.Close()
+			if closed {
+				h.file.Close()
+			}
 			return
 		}
 		h.cond.Broadcast()
@@ -481,21 +493,21 @@ func (h *HTTPReader) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	for int64(len(h.buf)) <= h.pos && !h.done {
+	for h.written <= h.pos && !h.done {
 		h.cond.Wait()
 	}
 	if h.closed {
 		return 0, os.ErrClosed
 	}
-	if h.pos >= int64(len(h.buf)) {
+	if h.pos >= h.written {
 		if h.err != nil {
 			return 0, h.err
 		}
 		return 0, io.EOF
 	}
-	n := copy(p, h.buf[h.pos:])
+	n, err := h.file.ReadAt(p[:min(int64(len(p)), h.written-h.pos)], h.pos)
 	h.pos += int64(n)
-	return n, nil
+	return n, err
 }
 
 func (h *HTTPReader) Seek(off int64, whence int) (int64, error) {
@@ -531,9 +543,14 @@ func (h *HTTPReader) Close() error {
 	}
 	h.closed = true
 	h.done = true
+	pumped := h.pumped
 	h.cond.Broadcast()
 	h.mu.Unlock()
-	return h.resp.Body.Close()
+	err := h.resp.Body.Close()
+	if pumped {
+		h.file.Close()
+	}
+	return err
 }
 
 // ratio 返回当前曲目的重采样比例（含倍速）。调用方需持有锁。

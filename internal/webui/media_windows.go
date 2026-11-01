@@ -9,6 +9,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"simmusic/internal/model"
 )
 
 // The CEF host owns the main window and with it the taskbar preview buttons and the System Media
@@ -64,7 +66,7 @@ func (u *UI) syncMedia() {
 		if hwnd == 0 {
 			continue
 		}
-		s := u.app.Snapshot()
+		s := u.app.Status()
 		text := "0\t\t\t"
 		if t := s.Current; t != nil {
 			state := "1"
@@ -77,7 +79,7 @@ func (u *UI) syncMedia() {
 			}
 			cover := ""
 			if t.InfoReady || t.Cover != "" {
-				u.remember(s.Queue)
+				u.remember([]model.Track{*t})
 				picture := t.LargeCover
 				if picture == "" {
 					picture = t.Cover

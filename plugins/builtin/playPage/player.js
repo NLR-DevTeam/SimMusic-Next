@@ -248,7 +248,11 @@ const setPlaySide = (showQueue, showLyrics) => {
     document.body.classList.toggle("hideLyrics", !showLyrics);
     largeQueueButton.classList.toggle("active", showQueue);
     lyricsButton.classList.toggle("active", showLyrics);
-    if (!showQueue) queuePanelTimer = setTimeout(() => queuePanel.hidden = document.body.classList.contains("hideList"), 300);
+    if (!showQueue) queuePanelTimer = setTimeout(() => {
+        queuePanel.hidden = document.body.classList.contains("hideList");
+        // 长队列的行不留到下次：面板打开时总会重新生成。
+        if (queuePanel.hidden) queueTracks.replaceChildren();
+    }, 300);
     if (showQueue) {
         queueSignature = queueKeys();
         renderQueue();
@@ -336,6 +340,9 @@ lyricsView.addEventListener("wheel", event => {
 addEventListener("resize", () => { if (state.visible) updateLyrics(true); });
 
 // ---------- 当前曲目：旧内容淡出，新封面解码完成后再替换并淡入 ----------
+const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+// 文字等封面一起淡入的最长时间。封面到得慢不耽误任何内容：文字先显示，图片随后补上。
+const coverPatience = 400;
 const updateTrackDisplay = async (track, changed) => {
     const generation = ++trackDisplayGeneration;
     const elements = [largeCover, largeTitle.parentElement, lyricsView];
@@ -350,26 +357,35 @@ const updateTrackDisplay = async (track, changed) => {
         element.classList.toggle("trackLoading", !!track);
     });
     let cover = coverOf(track, true);
-    if (track) {
+    // 看不见的页面没有过渡可做，也没有帧可供解码：直接更新到最新状态。
+    let arrived = !track || !state.visible;
+    let arriving;
+    if (!arrived) {
         const image = trackCoverImage = new Image();
-        await Promise.all([
-            (async () => {
+        arriving = (async () => {
+            image.src = cover;
+            try { await image.decode(); }
+            catch {
+                if (generation !== trackDisplayGeneration) return;
+                cover = "/.sim/assets/placeholder.png";
                 image.src = cover;
-                try { await image.decode(); }
-                catch {
-                    if (generation !== trackDisplayGeneration) return;
-                    cover = "/.sim/assets/placeholder.png";
-                    image.src = cover;
-                    await image.decode().catch(() => {});
-                }
-            })(),
-            changed ? new Promise(resolve => setTimeout(resolve, Math.max(0, 130 - (performance.now() - trackLeaveAt)))) : Promise.resolve()
+                await image.decode().catch(() => {});
+            }
+        })().then(() => arrived = true);
+        await Promise.all([
+            Promise.race([arriving, wait(coverPatience)]),
+            changed ? wait(Math.max(0, 130 - (performance.now() - trackLeaveAt))) : null
         ]);
         if (generation !== trackDisplayGeneration) return;
     }
-    largeCover.src = cover;
-    await largeCover.decode().catch(() => {});
-    if (generation !== trackDisplayGeneration) return;
+    if (arrived) {
+        largeCover.src = cover;
+        if (state.visible) await Promise.race([largeCover.decode().catch(() => {}), wait(100)]);
+        if (generation !== trackDisplayGeneration) return;
+    } else {
+        if (changed) largeCover.src = "/.sim/assets/placeholder.png";
+        arriving.then(() => { if (generation === trackDisplayGeneration) largeCover.src = cover; });
+    }
     largeTitle.textContent = track?.title || "未播放";
     updateArtist(largeArtist, track?.artist);
     updateCoverTheme();

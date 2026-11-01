@@ -51,7 +51,7 @@ type UI struct {
 	dragPaths           []string
 	droppedPackages     []string
 	prompts             map[string]*promptRequest
-	covers              map[string][]byte
+	covers              coverCache
 	tracks              map[string]model.Track
 	pendingInstall      string
 	pendingInstallToken string
@@ -68,7 +68,7 @@ type UI struct {
 }
 
 func New(a *core.App, desk *desklyric.Window) *UI {
-	u := &UI{app: a, desk: desk, covers: map[string][]byte{}, tracks: map[string]model.Track{}, quit: make(chan struct{}), playSignal: make(chan struct{}, 1)}
+	u := &UI{app: a, desk: desk, tracks: map[string]model.Track{}, quit: make(chan struct{}), playSignal: make(chan struct{}, 1)}
 	icons, _ := files.ReadFile("web/assets/fonts/remixicon.ttf")
 	u.overlay = overlay.Start(overlay.Host{Owner: func() uintptr { return uintptr(u.hwnd.Load()) }, Font: func() string { return a.Cfg.String("general.font") }, IconFont: icons, Send: u.hostSend,
 		Events: func(event string, menu int, path []int) {
@@ -291,9 +291,14 @@ func (u *UI) remember(ts []model.Track) {
 	}
 }
 
-func (u *UI) snapshot() any {
-	s := u.app.Snapshot()
+// snapshot is what the page polls for. The queue, which can be thousands of songs, comes only when it is not
+// the one the page has.
+func (u *UI) snapshot(knownQueue uint32) any {
+	s := u.app.SnapshotSince(knownQueue)
 	u.remember(s.Queue)
+	if s.Current != nil {
+		u.remember([]model.Track{*s.Current})
+	}
 	u.mu.Lock()
 	alerts := u.alerts
 	invalidations, navigations := u.musicInvalidations, u.navigations
@@ -328,7 +333,7 @@ func (u *UI) call(q request) (any, error) {
 	}
 	switch q.Action {
 	case "snapshot":
-		return u.snapshot(), nil
+		return u.snapshot(uint32(q.Number)), nil
 	case "dataFolder":
 		winx.OpenPath(a.DataDir)
 	case "logFolder":
@@ -354,9 +359,7 @@ func (u *UI) call(q request) (any, error) {
 			q.Scene = "list"
 		}
 		ts, err := a.ClearMusicInfo(q.Tracks, q.Scene)
-		u.mu.Lock()
-		u.covers = map[string][]byte{}
-		u.mu.Unlock()
+		u.covers.clear()
 		u.remember(ts)
 		return ts, err
 	case "play":
@@ -538,9 +541,7 @@ func (u *UI) call(q request) (any, error) {
 		return a.MusicIndexSize(), nil
 	case "clearIndex":
 		a.ClearAllMusicInfo()
-		u.mu.Lock()
-		u.covers = map[string][]byte{}
-		u.mu.Unlock()
+		u.covers.clear()
 		u.Toast("索引缓存已清理")
 	case "cancelPending":
 		a.CancelPending()
@@ -677,9 +678,7 @@ func (u *UI) call(q request) (any, error) {
 		if q.Key == plugin.PermSidebar {
 			go a.ReloadMenus()
 		}
-		u.mu.Lock()
-		u.covers = map[string][]byte{}
-		u.mu.Unlock()
+		u.covers.clear()
 	case "pluginSettings":
 		if p == nil {
 			return nil, errors.New("扩展不存在")
@@ -802,39 +801,53 @@ func (u *UI) cover(w http.ResponseWriter, r *http.Request) {
 	if scene == "play" && t.LargeCover != "" {
 		expires = t.LargeCoverExpires
 	}
+	cacheKey := k + "\x00" + scene
+	kept := u.covers.get(cacheKey)
+	// Only the address of a cover expires, not the picture: what is kept shows at once while the extension is
+	// asked for a new address behind it. A handler with nothing to show holds a connection of the browser that
+	// the player's state needs too, so it waits only so long.
+	refresh := ""
 	if expires > 0 && expires <= float64(time.Now().UnixMilli())/1000 {
-		if fresh, err := u.app.GetMusicInfo([]model.Track{t}, scene); err == nil {
-			t = fresh[0]
-			u.remember(fresh)
-		}
+		refresh = scene
 	} else if t.Cover == "" {
 		// The record holds no cover reference: ask the extension again.
-		if fresh, err := u.app.GetMusicInfo([]model.Track{t}, "list"); err == nil {
-			t = fresh[0]
-			u.remember(fresh)
+		refresh = "list"
+	}
+	gaveUp := false
+	if refresh != "" {
+		refreshed := make(chan []model.Track, 1)
+		go func() {
+			fresh, err := u.app.GetMusicInfo([]model.Track{t}, refresh)
+			if err == nil {
+				u.remember(fresh)
+			}
+			refreshed <- fresh
+		}()
+		if kept == nil {
+			select {
+			case fresh := <-refreshed:
+				if fresh != nil {
+					t = fresh[0]
+				}
+			case <-time.After(8 * time.Second):
+				gaveUp = true
+			}
 		}
 	}
 	if scene == "play" && t.LargeCover != "" {
 		t.Cover, t.CoverHeaders = t.LargeCover, t.LargeCoverHeaders
 		t.CoverProvider = t.LargeCoverProvider
 	}
-	cacheKey := fmt.Sprintf("%s\x00%s\x00%d\x00%s", k, scene, t.InfoRevision, t.Cover)
-	u.mu.Lock()
-	b, exists := u.covers[cacheKey]
-	u.mu.Unlock()
-	if !exists {
-		b = u.app.CoverBytes(t)
-		u.mu.Lock()
-		if len(u.covers) >= 512 {
-			for key := range u.covers {
-				delete(u.covers, key)
-				break
-			}
+	version := fmt.Sprintf("%d\x00%s", t.InfoRevision, t.Cover)
+	var b []byte
+	if kept != nil {
+		b = kept.data
+	}
+	if !gaveUp && (kept == nil || refresh == "" && kept.version != version) {
+		if read := u.app.CoverBytes(t); len(read) > 0 {
+			b = read
+			u.covers.put(cacheKey, version, b)
 		}
-		if len(b) > 0 {
-			u.covers[cacheKey] = b
-		}
-		u.mu.Unlock()
 	}
 	// Revisioned local/File covers can be reused for this run. Expiring web
 	// covers never outlive their plugin's declared lifetime in Chromium's cache.
@@ -848,7 +861,7 @@ func (u *UI) cover(w http.ResponseWriter, r *http.Request) {
 	} else if strings.HasPrefix(t.Cover, "http://") || strings.HasPrefix(t.Cover, "https://") {
 		maxAge = 0
 	}
-	if r.URL.Query().Get("rev") != fmt.Sprint(t.InfoRevision) {
+	if refresh != "" || r.URL.Query().Get("rev") != fmt.Sprint(t.InfoRevision) {
 		maxAge = 0
 	}
 	w.Header().Set("Cache-Control", fmt.Sprintf("private, max-age=%d", maxAge))

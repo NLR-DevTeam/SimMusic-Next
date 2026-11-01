@@ -24,8 +24,8 @@ import (
 // PlayerHost is the playback control of the host (implemented by core).
 type PlayerHost interface {
 	// PlayerState is everything a player display is told: the song, the queue, the lyrics, the status and
-	// the settings it goes by.
-	PlayerState() map[string]any
+	// the settings it goes by. It carries the queue's stamp; the queue is left out while that is the one known.
+	PlayerState(known uint32) map[string]any
 	PlayerCommand(name string, args []any) (any, error)
 	// PlayerCover is the cover picture of a song in the state, the current one for an empty source and id.
 	PlayerCover(source, id string, large bool) []byte
@@ -178,13 +178,18 @@ func (p *Plugin) installPlayer(rs *runState, sim *goja.Object) {
 	// What was delivered last, one JSON text per group. Whoever holds sentMu reads the host.
 	var sentMu sync.Mutex
 	sent := map[string]string{}
+	var sentQueue uint32
 	// diff reads the host's state and returns what differs from the last delivery.
 	diff := func(h PlayerHost) (full map[string]any, patch string, changed []string, moved bool) {
 		sentMu.Lock()
 		defer sentMu.Unlock()
-		full = h.PlayerState()
+		full = h.PlayerState(sentQueue)
+		stamp, _ := full["queueStamp"].(uint32)
 		part := map[string]any{}
 		for _, group := range PlayerGroups {
+			if group.Name == "queue" && stamp == sentQueue {
+				continue
+			}
 			fields := map[string]any{}
 			for _, key := range group.Keys {
 				fields[key] = full[key]
@@ -199,6 +204,7 @@ func (p *Plugin) installPlayer(rs *runState, sim *goja.Object) {
 				part[key] = value
 			}
 		}
+		sentQueue = stamp
 		position, _ := json.Marshal(full["position"])
 		moved = sent["position"] != string(position)
 		sent["position"] = string(position)

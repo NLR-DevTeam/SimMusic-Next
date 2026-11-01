@@ -65,7 +65,7 @@ func (u *UI) syncDesk() {
 		if u.desk == nil {
 			continue
 		}
-		s := u.app.Snapshot()
+		s := u.app.Status()
 		want := u.app.State.Bool("desk.visible")
 		if u.app.Sleep().Pending != "" {
 			want = false
@@ -122,11 +122,11 @@ func (u *UI) mediaAction(action string) {
 	case "toggle":
 		a.TogglePlay()
 	case "play":
-		if !a.Snapshot().Playing {
+		if !a.Status().Playing {
 			a.TogglePlay()
 		}
 	case "pause", "stop":
-		if a.Snapshot().Playing {
+		if a.Status().Playing {
 			a.TogglePlay()
 		}
 	}

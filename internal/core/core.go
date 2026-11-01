@@ -2,10 +2,13 @@
 package core
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/maphash"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,7 +24,7 @@ import (
 	"simmusic/internal/winx"
 )
 
-const Version = "0.1.0-demo"
+const Version = "0.2.0"
 
 // 播放模式（与旧版 loop 配置一致：列表循环 → 单曲循环 → 随机播放）
 const (
@@ -336,7 +339,9 @@ func (a *App) CoverBytes(t model.Track) []byte {
 		b, _ := os.ReadFile(strings.TrimPrefix(c, "file:"))
 		return b
 	case strings.HasPrefix(c, "http://"), strings.HasPrefix(c, "https://"):
-		b, _ := resourceBytes(p, resource)
+		// A cover is read while the browser holds one of the few connections it keeps to this program,
+		// which the state of the player needs as well; a slow picture cannot be waited for as long as a song.
+		b, _ := fetchResource(p, resource, 15*time.Second)
 		return b
 	}
 	return nil
@@ -345,22 +350,74 @@ func (a *App) CoverBytes(t model.Track) []byte {
 // ---------- 播放队列 ----------
 
 type Snapshot struct {
-	Queue    []model.Track
-	Index    int
-	Mode     int
-	Current  *model.Track
-	Playing  bool
-	Pos, Dur float64
-	Lyrics   []lyrics.Line
-	Words    []lyrics.WordLine // word-by-word lyrics; nil when the song has none
-	Volume   float64
-	Speed    float64
-	Loading  bool // the current track's audio is still being opened
+	Queue      []model.Track
+	QueueStamp uint32 // changes with what a display shows of the queue
+	Index      int
+	Mode       int
+	Current    *model.Track
+	Playing    bool
+	Pos, Dur   float64
+	Lyrics     []lyrics.Line
+	Words      []lyrics.WordLine // word-by-word lyrics; nil when the song has none
+	Volume     float64
+	Speed      float64
+	Loading    bool // the current track's audio is still being opened
 }
 
-func (a *App) Snapshot() Snapshot {
+// Snapshot is the whole state of the player.
+func (a *App) Snapshot() Snapshot { return a.snapshot(true, 0) }
+
+// SnapshotSince leaves the queue out while its stamp is still known, for displays polling several times a second.
+func (a *App) SnapshotSince(known uint32) Snapshot { return a.snapshot(true, known) }
+
+// Status is a Snapshot without the queue, for what only follows the current song.
+func (a *App) Status() Snapshot { return a.snapshot(false, 0) }
+
+var queueSeed = maphash.MakeSeed()
+
+func (a *App) queueStampLocked() uint32 {
+	var h maphash.Hash
+	h.SetSeed(queueSeed)
+	var number [8]byte
+	add := func(t *model.Track) {
+		for _, text := range []string{t.Source, t.ID, t.Title, t.Artist, t.Album, t.Cover, t.LargeCover} {
+			h.WriteString(text)
+			h.WriteByte(0)
+		}
+		binary.LittleEndian.PutUint64(number[:], t.InfoRevision)
+		h.Write(number[:])
+		binary.LittleEndian.PutUint64(number[:], math.Float64bits(t.Duration))
+		h.Write(number[:])
+		h.WriteByte(boolByte(t.InfoReady) | boolByte(t.MetadataReady)<<1)
+	}
+	if a.mode == ModeShuffle {
+		for _, normal := range a.shuffle {
+			add(&a.queue[normal])
+		}
+	} else {
+		for i := range a.queue {
+			add(&a.queue[i])
+		}
+	}
+	// Zero is what a display that has seen nothing yet says it knows.
+	return uint32(h.Sum64()>>32) | 1
+}
+
+func boolByte(value bool) byte {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func (a *App) snapshot(queue bool, known uint32) Snapshot {
 	a.mu.Lock()
-	s := Snapshot{Queue: a.activeQueueLocked(), Index: a.activeIndexLocked(), Mode: a.mode, Lyrics: append([]lyrics.Line(nil), a.lyricLns...), Loading: a.loading != 0 && a.loading == a.loadGen}
+	s := Snapshot{Index: a.activeIndexLocked(), Mode: a.mode, Lyrics: append([]lyrics.Line(nil), a.lyricLns...), Loading: a.loading != 0 && a.loading == a.loadGen}
+	if queue {
+		if s.QueueStamp = a.queueStampLocked(); s.QueueStamp != known {
+			s.Queue = a.activeQueueLocked()
+		}
+	}
 	if a.index >= 0 && a.index < len(a.queue) {
 		t := a.queue[a.index]
 		s.Current = &t

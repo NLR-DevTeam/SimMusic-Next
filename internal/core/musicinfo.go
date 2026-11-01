@@ -1,18 +1,20 @@
 package core
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
-	"simmusic/internal/config"
 	"simmusic/internal/model"
 	"simmusic/internal/plugin"
+	"simmusic/internal/wake"
 	"slices"
 	"strings"
 	"sync"
@@ -33,7 +35,9 @@ type infoFlight struct {
 }
 type musicIndex struct {
 	mu       sync.Mutex
-	store    *config.Store
+	flushMu  sync.Mutex
+	path     string
+	saveWait *time.Timer
 	entries  map[string]*infoEntry
 	flights  map[string]*infoFlight
 	epochs   map[string]uint64
@@ -42,16 +46,73 @@ type musicIndex struct {
 
 func (a *App) musicIndex() *musicIndex {
 	a.infoOnce.Do(func() {
-		x := &musicIndex{store: config.Open(filepath.Join(a.DataDir, "music-index.json"), nil), entries: map[string]*infoEntry{}, flights: map[string]*infoFlight{}, epochs: map[string]uint64{}, revision: uint64(time.Now().UnixMilli())}
-		for key := range x.store.All() {
-			var e infoEntry
-			if x.store.Unmarshal(key, &e) && e.Fields != nil && e.Scenes != nil {
-				x.entries[key] = &e
+		x := &musicIndex{path: filepath.Join(a.DataDir, "music-index.json"), entries: map[string]*infoEntry{}, flights: map[string]*infoFlight{}, epochs: map[string]uint64{}, revision: uint64(time.Now().UnixMilli())}
+		var stored map[string]*infoEntry
+		if b, err := os.ReadFile(x.path); err == nil {
+			_ = json.Unmarshal(b, &stored)
+		}
+		for key, e := range stored {
+			if e != nil && e.Fields != nil && e.Scenes != nil {
+				x.entries[key] = e
 			}
 		}
 		a.infoIndex = x
 	})
 	return a.infoIndex
+}
+
+// save writes the index out shortly after the last change; the caller holds x.mu. The records exist once, in
+// entries: a library's lyrics are no small thing to keep twice, or to assemble into one piece for every write.
+func (x *musicIndex) save() {
+	if x.saveWait != nil {
+		x.saveWait.Stop()
+	}
+	x.saveWait = time.AfterFunc(300*time.Millisecond, func() { _ = x.flush() })
+}
+
+func (x *musicIndex) flush() error {
+	x.flushMu.Lock()
+	defer x.flushMu.Unlock()
+	x.mu.Lock()
+	keys := slices.Collect(maps.Keys(x.entries))
+	x.mu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(x.path), 0o755); err != nil {
+		return err
+	}
+	tmp := x.path + ".tmp"
+	file, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	w := bufio.NewWriter(file)
+	w.WriteByte('{')
+	first := true
+	for _, key := range keys {
+		x.mu.Lock()
+		e := x.entries[key]
+		var record []byte
+		if e != nil {
+			record, err = json.Marshal(e)
+		}
+		x.mu.Unlock()
+		if e == nil || err != nil {
+			continue
+		}
+		name, _ := json.Marshal(key)
+		if !first {
+			w.WriteByte(',')
+		}
+		first = false
+		w.Write(name)
+		w.WriteByte(':')
+		w.Write(record)
+	}
+	w.WriteByte('}')
+	if err = errors.Join(w.Flush(), file.Close()); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, x.path)
 }
 
 // filterIndex removes expired and unbounded web addresses, recursively, while retaining metadata.
@@ -238,7 +299,15 @@ func (a *App) fetchInfo(s *plugin.Scheme, refs []model.Track, scene string) ([]m
 		ids[i] = t.ID
 	}
 	var out []map[string]json.RawMessage
-	if err := s.CallInto(time.Minute, &out, "getMusicInfo", ids, scene); err != nil {
+	started := time.Now()
+	err := s.CallInto(time.Minute, &out, "getMusicInfo", ids, scene)
+	// A request that met the computer's sleep says nothing about the song: it goes again once the network is back.
+	if err != nil && wake.Interrupted(started) {
+		a.sourceError(refs[0], "歌曲信息请求被系统休眠打断，稍后重试", err)
+		wake.Settle()
+		err = s.CallInto(time.Minute, &out, "getMusicInfo", ids, scene)
+	}
+	if err != nil {
 		return nil, err
 	}
 	p, _ := s.Handler("getMusicInfo")
@@ -417,7 +486,7 @@ func (a *App) musicInfos(refs []model.Track, scene string) ([]model.MusicInfo, [
 					e.Fields = cachedFields(f.fields)
 					e.Scenes[scene] = len(e.Fields) == len(f.fields)
 					x.entries[key] = e
-					x.store.Set(key, e)
+					x.save()
 				}
 			}
 			delete(x.flights, fmt.Sprintf("%s\x00%s\x00%d", key, scene, epochs[key]))
@@ -559,8 +628,8 @@ func (a *App) ClearMusicInfo(ts []model.Track, scene string) ([]model.Track, err
 		key := t.Key()
 		x.epochs[key]++
 		delete(x.entries, key)
-		x.store.Delete(key)
 	}
+	x.save()
 	x.mu.Unlock()
 	fresh, err := a.GetMusicInfo(ts, "list")
 	if err != nil {
@@ -587,6 +656,10 @@ func (a *App) ClearMusicInfo(ts []model.Track, scene string) ([]model.Track, err
 }
 
 func resourceBytes(p *plugin.Plugin, r model.Resource) ([]byte, error) {
+	return fetchResource(p, r, 60*time.Second)
+}
+
+func fetchResource(p *plugin.Plugin, r model.Resource, limit time.Duration) ([]byte, error) {
 	if err := p.ValidateResource(r); err != nil {
 		return nil, err
 	}
@@ -606,7 +679,7 @@ func resourceBytes(p *plugin.Plugin, r model.Resource) ([]byte, error) {
 	for k, v := range r.Headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := (&http.Client{Timeout: 60 * time.Second}).Do(req)
+	resp, err := (&http.Client{Timeout: limit}).Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -659,7 +732,7 @@ func (a *App) resourcePlugin(source, provider string) *plugin.Plugin {
 
 func (a *App) FlushMusicIndex() error {
 	if a.infoIndex != nil {
-		return a.infoIndex.store.Flush()
+		return a.infoIndex.flush()
 	}
 	return nil
 }
@@ -702,12 +775,11 @@ func (a *App) resetMusicInfo(match func(key string) bool, drop bool) {
 		e := x.entries[key]
 		if drop || e == nil {
 			delete(x.entries, key)
-			x.store.Delete(key)
 			continue
 		}
 		e.expireResources(e.Version)
-		x.store.Set(key, e)
 	}
+	x.save()
 	x.mu.Unlock()
 	a.mu.Lock()
 	for i := range a.queue {

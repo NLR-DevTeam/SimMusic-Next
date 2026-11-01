@@ -12,6 +12,7 @@ import (
 	"github.com/godbus/dbus/v5/prop"
 
 	"simmusic/internal/core"
+	"simmusic/internal/model"
 )
 
 // The system media controls on Linux are MPRIS: the program is a player on the session bus, the desktop
@@ -155,7 +156,7 @@ func (u *UI) syncMedia() {
 			return
 		case <-tick.C:
 		}
-		s := u.app.Snapshot()
+		s := u.app.Status()
 		status := "Stopped"
 		metadata := map[string]dbus.Variant{"mpris:trackid": dbus.MakeVariant(dbus.ObjectPath("/org/mpris/MediaPlayer2/TrackList/NoTrack"))}
 		key := ""
@@ -177,7 +178,7 @@ func (u *UI) syncMedia() {
 			}
 			cover := ""
 			if t.InfoReady || t.Cover != "" {
-				u.remember(s.Queue)
+				u.remember([]model.Track{*t})
 				cover = u.url + "cover?key=" + url.QueryEscape(t.Key()) + "&scene=play&rev=" + strconv.FormatUint(t.InfoRevision, 10)
 				metadata["mpris:artUrl"] = dbus.MakeVariant(cover)
 			}

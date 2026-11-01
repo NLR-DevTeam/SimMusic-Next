@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,6 +21,7 @@ import (
 
 	"simmusic/internal/core"
 	"simmusic/internal/desklyric"
+	"simmusic/internal/wake"
 	ui "simmusic/internal/webui"
 	"simmusic/internal/winx"
 	"simmusic/plugins/builtin"
@@ -117,6 +119,16 @@ func main() {
 	}
 	setupLogs(dir)
 	log.Println("SimMusic Next", core.Version, "data:", dir)
+	// The state polls alone would keep the heap at twice its live size in garbage; a music player runs for days.
+	debug.SetGCPercent(50)
+	// A connection does not survive the computer's sleep or a change of network, and a request on a dead one
+	// hangs until it runs out of time. HTTP/2 puts every request to a server on one such connection.
+	transport := http.DefaultTransport.(*http.Transport)
+	transport.HTTP2 = &http.HTTP2Config{SendPingTimeout: 20 * time.Second, PingTimeout: 5 * time.Second}
+	wake.OnResume(func() {
+		log.Println("系统已从休眠恢复")
+		transport.CloseIdleConnections()
+	})
 	// The system media controls name an unpackaged program by what is registered for its AppUserModelID.
 	icon := filepath.Join(dir, "app-icon.png")
 	if current, _ := os.ReadFile(icon); !bytes.Equal(current, ui.IconPNG) {

@@ -37,6 +37,7 @@ let trackDisplayGeneration = 0;
 let trackDisplayPending = false;
 let trackCoverImages = [];
 let queueSignature = "";
+let queueStamp = 0;
 let catalogSignature = "";
 let downloadSignature = "";
 let previousVolume = .8;
@@ -1609,8 +1610,11 @@ const openPlayPage = async open => {
 const updatePlayer = snapshot => {
     maximizeButton.textContent = String.fromCodePoint(snapshot.windowMaximized ? 0xEABB : 0xEAB9);
     maximizeButton.title = snapshot.windowMaximized ? "还原" : "最大化";
+    // The queue comes only when it is not the one held here.
+    const queue = player.Queue;
     player = snapshot.player;
-    player.Queue ??= [];
+    player.Queue = player.QueueStamp === queueStamp ? queue : player.Queue || [];
+    queueStamp = player.QueueStamp;
     player.Lyrics ??= [];
     downloads = snapshot.downloads || [];
     updateDownloadNav();
@@ -1642,7 +1646,7 @@ const updatePlayer = snapshot => {
     speed = player.Speed || 1;
     timeLabel.textContent = `${formatTime(player.Pos)} / ${formatTime(player.Dur)}`;
     desktopButton.classList.toggle("active", snapshot.deskVisible);
-    const nextQueueSignature = JSON.stringify([player.Queue, player.Index]);
+    const nextQueueSignature = `${player.QueueStamp}:${player.Index}`;
     if (queueSignature !== nextQueueSignature && !dragActive) {
         queueSignature = nextQueueSignature;
         updateRowStates();
@@ -1704,6 +1708,10 @@ const updateVolumeIcons = () => {
     muteButton.title = player.Volume <= 0 ? "取消静音" : "静音";
 };
 let trackLeaveAt = 0;
+const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+// The text of a new song waits this long to fade in together with its cover. A cover that is slow to arrive
+// holds up nothing: the text is shown and the picture follows.
+const coverPatience = 400;
 const updateTrackDisplay = async (track, changed) => {
     const generation = ++trackDisplayGeneration;
     const elements = [playerBar.querySelector(".info")];
@@ -1720,26 +1728,35 @@ const updateTrackDisplay = async (track, changed) => {
         element.classList.toggle("trackLoading", !!track);
     });
     const covers = [coverUrl(track)];
-    if (track) {
+    // A page out of sight has nothing to fade and no frame to decode for: it is brought up to date directly.
+    let arrived = !track || document.hidden;
+    let arriving;
+    if (!arrived) {
         trackCoverImages = covers.map(() => new Image());
-        await Promise.all([
-            ...trackCoverImages.map(async (image, index) => {
+        arriving = Promise.all(trackCoverImages.map(async (image, index) => {
+            image.src = covers[index];
+            try { await image.decode(); }
+            catch {
+                if (generation !== trackDisplayGeneration) return;
+                covers[index] = "assets/placeholder.png";
                 image.src = covers[index];
-                try { await image.decode(); }
-                catch {
-                    if (generation !== trackDisplayGeneration) return;
-                    covers[index] = "assets/placeholder.png";
-                    image.src = covers[index];
-                    await image.decode().catch(() => {});
-                }
-            }),
-            changed ? new Promise(resolve => setTimeout(resolve, Math.max(0, 130 - (performance.now() - trackLeaveAt)))) : Promise.resolve()
+                await image.decode().catch(() => {});
+            }
+        })).then(() => arrived = true);
+        await Promise.all([
+            Promise.race([arriving, wait(coverPatience)]),
+            changed ? wait(Math.max(0, 130 - (performance.now() - trackLeaveAt))) : null
         ]);
         if (generation !== trackDisplayGeneration) return;
     }
-    miniCover.src = covers[0];
-    await miniCover.decode().catch(() => {});
-    if (generation !== trackDisplayGeneration) return;
+    if (arrived) {
+        miniCover.src = covers[0];
+        if (!document.hidden) await Promise.race([miniCover.decode().catch(() => {}), wait(100)]);
+        if (generation !== trackDisplayGeneration) return;
+    } else {
+        if (changed) miniCover.src = "assets/placeholder.png";
+        arriving.then(() => { if (generation === trackDisplayGeneration) miniCover.src = covers[0]; });
+    }
     miniTitle.textContent = track?.title || "未播放";
     updateArtist(miniArtist, track?.artist);
     trackDisplayPending = false;
@@ -1804,15 +1821,24 @@ document.addEventListener("keydown", event => {
 
 let catalogPollAt = 0;
 let failureCount = 0;
+let pollTimer = 0;
+let polling = false;
 const poll = async () => {
+    clearTimeout(pollTimer);
+    if (polling) return;
+    polling = true;
     try {
-        updatePlayer(await api("snapshot"));
+        updatePlayer(await api("snapshot", { number: queueStamp }));
         failureCount = 0;
         connectionBanner.hidden = true;
         if (Date.now() > catalogPollAt) { catalogPollAt = Date.now() + 2000; await refreshCatalog(); }
     } catch (error) { if (++failureCount >= 3) connectionBanner.hidden = false; }
-    setTimeout(poll, document.hidden ? 1000 : 250);
+    polling = false;
+    pollTimer = setTimeout(poll, document.hidden ? 1000 : 250);
 };
+// The browser holds a hidden page's timers back for up to a minute. What changed meanwhile is read the moment
+// the page is seen again, not when the waiting timer gets its turn.
+const pollOnReturn = () => { if (!document.hidden) poll(); };
 const start = async () => {
     await refreshCatalog();
     lyricsShown = catalog.lyricsShown;
@@ -1820,6 +1846,8 @@ const start = async () => {
     await navigate({ kind: "home" });
     waitPlayRequests();
     poll();
+    document.addEventListener("visibilitychange", pollOnReturn);
+    addEventListener("focus", pollOnReturn);
 };
 window.simInitialReady = start().catch(() => { mainContent.innerHTML = emptyState(); connectionBanner.hidden = false; setTimeout(start, 1500); });
 

@@ -72,7 +72,6 @@ func TestRestoreLyricsFromPersistentIndexAndPlugin(t *testing.T) {
 	x := b.musicIndex()
 	x.mu.Lock()
 	delete(x.entries, ref.Key())
-	x.store.Delete(ref.Key())
 	x.mu.Unlock()
 	b.FlushMusicIndex()
 	_, p = makeRestored()

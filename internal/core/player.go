@@ -95,15 +95,18 @@ func (a *App) PublicState(s Snapshot, track func(model.Track) map[string]any) ma
 		until = sleep.Until.UnixMilli()
 	}
 	return map[string]any{
-		"current": current, "index": s.Index, "queue": queue, "lyrics": map[string]any{"traditional": lines, "perWord": perWord},
+		"current": current, "index": s.Index, "queue": queue, "queueStamp": s.QueueStamp, "lyrics": map[string]any{"traditional": lines, "perWord": perWord},
 		"playing": s.Playing, "loading": s.Loading, "position": s.Pos, "duration": s.Dur,
 		"volume": s.Volume, "speed": s.Speed, "mode": s.Mode, "settings": settings,
 		"sleep": map[string]any{"active": sleep.Active(), "until": until, "waitTrackEnd": sleep.WaitTrackEnd},
 	}
 }
 
-// PlayerState is the state of sim.player: all a play page is told of the playback, in the same shape.
-func (a *App) PlayerState() map[string]any { return a.PublicState(a.Snapshot(), nil) }
+// PlayerState is the state of sim.player: all a play page is told of the playback, in the same shape. The
+// queue is left out while its stamp is still the one known.
+func (a *App) PlayerState(known uint32) map[string]any {
+	return a.PublicState(a.SnapshotSince(known), nil)
+}
 
 // PlayerCover is the picture data of the cover of a song in the player's state, the current one when source
 // and id are empty; large asks for the cover of the play page. nil when there is no such song or it has no

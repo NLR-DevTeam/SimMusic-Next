@@ -38,6 +38,7 @@ type playView struct {
 	side  string // what the host asked to be shown beside the player: "queue", "lyrics" or ""
 	ready bool   // the page asked for the state
 	sent  map[string]string
+	queue uint32 // the stamp of the queue it has
 	color string
 	dark  bool
 	full  bool // the main window is fullscreen
@@ -296,7 +297,7 @@ func (pv *playView) perform(u *UI, action string, args []any) (any, error) {
 	case "hello":
 		pv.mu.Lock()
 		pv.ready = true
-		pv.sent = map[string]string{}
+		pv.sent, pv.queue = map[string]string{}, 0
 		pv.mu.Unlock()
 		pv.push(u, true)
 	case "close":
@@ -420,8 +421,11 @@ func (pv *playView) push(u *UI, force bool) {
 	if !pv.ready {
 		return
 	}
-	snapshot := u.app.Snapshot()
+	snapshot := u.app.SnapshotSince(pv.queue)
 	u.remember(snapshot.Queue)
+	if snapshot.Current != nil {
+		u.remember([]model.Track{*snapshot.Current})
+	}
 	// A song is shown with what the index knows of it by now, as the lists of the host page do.
 	u.mu.Lock()
 	state := u.app.PublicState(snapshot, func(t model.Track) map[string]any {
@@ -436,6 +440,9 @@ func (pv *playView) push(u *UI, force bool) {
 	patch := map[string]any{}
 	changed := []string{}
 	for _, group := range playStateGroups {
+		if group.Name == "queue" && snapshot.QueueStamp == pv.queue {
+			continue
+		}
 		part := map[string]any{}
 		for _, key := range group.Keys {
 			part[key] = state[key]
@@ -450,6 +457,7 @@ func (pv *playView) push(u *UI, force bool) {
 			patch[key] = value
 		}
 	}
+	pv.queue = snapshot.QueueStamp
 	position := strconv.FormatFloat(snapshot.Pos, 'f', 3, 64)
 	if len(changed) == 0 && (pv.sent["position"] == position || !pv.shown && !force) {
 		return

@@ -104,12 +104,13 @@ func TestReloadCancelsOldVMJobsAndInterruptsTimeout(t *testing.T) {
 	if err := p.CallInto(time.Second, &generation, "generation"); err != nil || generation != 2 {
 		t.Fatal("replacement runtime did not load", generation, err)
 	}
+	defer func(previous time.Duration) { stuckAfter = previous }(stuckAfter)
+	stuckAfter = 0
 	start := time.Now()
-	if _, err := p.Call(30*time.Millisecond, "busy"); err == nil || p.Running() || m.Scheme("timers") != nil || time.Since(start) > time.Second {
-		t.Fatal("timed-out JS was not interrupted/unregistered", err)
+	if _, err := p.Call(30*time.Millisecond, "busy"); err == nil || time.Since(start) > time.Second {
+		t.Fatal("timed-out call did not return", err)
 	}
-	m.RestartOrdered()
-	if !p.Running() {
-		t.Fatal("timed-out extension could not reload")
+	if err := p.CallInto(time.Second, &generation, "generation"); err != nil || generation != 2 || !p.Running() {
+		t.Fatal("timed-out JS was not interrupted, or took the runtime with it", generation, err)
 	}
 }
